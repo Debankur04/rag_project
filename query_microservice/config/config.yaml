@@ -1,0 +1,35 @@
+models:
+  primary:
+    provider: groq
+    model_name: llama-3.3-70b-versatile
+    max_tokens: 4096
+    cost_per_1k_input: 0.0006       # USD
+    cost_per_1k_output: 0.0008
+    avg_latency_ms: 850
+    tier: expensive
+
+  fast:
+    provider: groq
+    model_name: llama-3.1-8b-instant
+    max_tokens: 2048
+    cost_per_1k_input: 0.00005
+    cost_per_1k_output: 0.00008
+    avg_latency_ms: 200
+    tier: cheap
+
+  fallback:
+    provider: gemini
+    model_name: gemini-2.0-flash
+    max_tokens: 8192
+    cost_per_1k_input: 0.00010
+    cost_per_1k_output: 0.00040
+    avg_latency_ms: 600
+    tier: cheap
+
+routing_rules:
+  use_intent_classifier: true
+  simple_query_model: fast
+  default_model: primary
+  fallback_chain: [primary, fast, fallback]
+  latency_threshold_ms: 3000      # switch if p99 > this
+  error_threshold_pct: 5          # switch if error rate > 5%

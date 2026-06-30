@@ -1,0 +1,139 @@
+# =========================
+
+# Python
+
+# =========================
+
+**pycache**/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+
+# Virtual environments
+
+.venv/
+venv/
+env/
+ENV/
+
+# =========================
+
+# Environment & Secrets
+
+# =========================
+
+.env
+.env.*
+*.env
+*.env.*
+
+# dotenv backups / overrides
+
+.env.local
+.env.development
+.env.production
+
+# =========================
+
+# Certificates & Keys (VERY IMPORTANT)
+
+# =========================
+
+*.pem
+*.key
+*.crt
+*.csr
+*.p12
+*.pfx
+*.der
+*.cer
+
+# Google / AWS / service account keys
+
+*service-account*.json
+*credentials*.json
+*gcloud*.json
+*firebase*.json
+
+# =========================
+
+# Logs & Temp files
+
+# =========================
+
+*.log
+logs/
+tmp/
+temp/
+*.tmp
+
+# =========================
+
+# OS files
+
+# =========================
+
+.DS_Store
+Thumbs.db
+
+# =========================
+
+# IDE / Editor
+
+# =========================
+
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# =========================
+
+# Jupyter
+
+# =========================
+
+.ipynb_checkpoints/
+
+# =========================
+
+# Database / Local files
+
+# =========================
+
+*.sqlite3
+*.db
+
+# =========================
+
+# Docker
+
+# =========================
+
+*.tar
+docker-compose.override.yml
+
+# =========================
+
+# Node (if frontend present)
+
+# =========================
+
+node_modules/
+npm-debug.log
+yarn-error.log
+
+# =========================
+
+# Misc
+
+# =========================
+
+coverage/
+htmlcov/
+.cache/
