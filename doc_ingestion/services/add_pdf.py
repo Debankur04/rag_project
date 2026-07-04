@@ -17,14 +17,21 @@ from qdrant_client import models
 # from supabase_operations import db_operations
 from rag_project.doc_ingestion.services.documents_table import compute_file_hash, get_existing_document, create_document, mark_document_ingested, mark_document_failed, mark_document_processing
 from rag_project.doc_ingestion.services.documents_chunks import bulk_insert_chunks, delete_chunks_for_document
-from rag_project.doc_ingestion.config.db import qdrant
+from rag_project.config.db import qdrant
 from rag_project.doc_ingestion.services.pubsub import pubsub
-from rag_project.doc_ingestion.config.settings import settings
+from rag_project.config.settings import settings
 
 CHUNK_SIZE = 1000
 CHUNK_OVERLAP = 200
 EMBED_MODEL_NAME = "all-MiniLM-L6-v2"
-embeddings = HuggingFaceEmbeddings(model_name=EMBED_MODEL_NAME)
+embeddings = None
+
+
+def _get_embeddings():
+    global embeddings
+    if embeddings is None:
+        embeddings = HuggingFaceEmbeddings(model_name=EMBED_MODEL_NAME)
+    return embeddings
 
 
 
@@ -76,7 +83,7 @@ def _ensure_collection(tenant_id: str):
         if qdrant.collection_exists(collection_name=collection_name):
             return
             
-        dim = len(embeddings.embed_query("dimension_probe"))
+        dim = len(_get_embeddings().embed_query("dimension_probe"))
         qdrant.create_collection(
             collection_name=collection_name,
             vectors_config=VectorParams(
@@ -143,7 +150,7 @@ def ingest_pdf(
         chunk_data_list = []
         for idx, chunk in enumerate(chunks):
             vector_id = str(uuid4())
-            vector = embeddings.embed_query(chunk.page_content)
+            vector = _get_embeddings().embed_query(chunk.page_content)
 
             points.append(models.PointStruct(
                 id=vector_id,

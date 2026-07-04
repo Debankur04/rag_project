@@ -1,4 +1,4 @@
-from rag_project.doc_ingestion.config.db_config import engine
+from rag_project.config.db_config import engine
 from rag_project.doc_ingestion.models.base import Base
 
 # import ALL models so metadata registers them

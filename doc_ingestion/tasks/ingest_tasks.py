@@ -4,11 +4,11 @@ import tempfile
 from pathlib import Path
 from celery.utils.log import get_task_logger
 import httpx
-from rag_project.doc_ingestion_microservice.services.pubsub import pubsub
-from rag_project.doc_ingestion_microservice.services.mongo_logger import log_ingestion_sync
-from rag_project.doc_ingestion_microservice.services.add_pdf import ingest_pdf
-from rag_project.doc_ingestion_microservice.config.db_config import SessionLocal
-from rag_project.doc_ingestion_microservice.config.settings import settings
+from rag_project.doc_ingestion.services.pubsub import pubsub
+from rag_project.doc_ingestion.services.mongo_logger import log_ingestion_sync
+from rag_project.doc_ingestion.services.add_pdf import ingest_pdf
+from rag_project.config.db_config import SessionLocal
+from rag_project.config.settings import settings
 from .celery_app import celery_app
 
 logger = get_task_logger(__name__)

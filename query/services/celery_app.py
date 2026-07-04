@@ -2,7 +2,7 @@ from celery import Celery
 from rag_project.config.settings import settings
 
 celery_app = Celery(
-    "doc_ingestion",
+    "query",
     broker=settings.CELERY_BROKER_URL,
     backend=settings.CELERY_RESULT_BACKEND or settings.REDIS_URL,
 )

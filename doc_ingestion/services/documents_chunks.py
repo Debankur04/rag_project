@@ -1,4 +1,4 @@
-from rag_project.doc_ingestion.config.db import qdrant
+from rag_project.config.db import qdrant
 from datetime import datetime
 
 from rag_project.doc_ingestion.models.chunks import Chunk
