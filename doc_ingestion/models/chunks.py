@@ -1,7 +1,7 @@
 from sqlalchemy import Column, String, Integer, TIMESTAMP, BigInteger,ForeignKey
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.sql import func
-from rag_project.doc_ingestion.models.base import Base
+from doc_ingestion.models.base import Base
 import uuid
 
 class Chunk(Base):

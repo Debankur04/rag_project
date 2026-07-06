@@ -5,7 +5,7 @@ from typing import Any
 from qdrant_client import QdrantClient
 from supabase import create_client
 
-from rag_project.config.settings import settings
+from config.settings import settings
 
 
 class LazyClient:

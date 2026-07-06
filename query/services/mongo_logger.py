@@ -4,7 +4,7 @@ from typing import Optional
 
 from motor.motor_asyncio import AsyncIOMotorClient
 from pymongo import MongoClient
-from rag_project.config.settings import settings
+from config.settings import settings
 
 logger = logging.getLogger(__name__)
 

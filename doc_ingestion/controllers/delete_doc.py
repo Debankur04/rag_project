@@ -1,5 +1,5 @@
-from rag_project.doc_ingestion.dto.Doc_dto import DeleteDocRequest
-from rag_project.doc_ingestion.services.delete import delete_document
+from doc_ingestion.dto.Doc_dto import DeleteDocRequest
+from doc_ingestion.services.delete import delete_document
 
 def delete_doc(payload: DeleteDocRequest, db):
     delete_document(

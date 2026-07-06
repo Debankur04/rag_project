@@ -1,8 +1,8 @@
 from uuid import uuid4
-from rag_project.doc_ingestion.dto.Doc_dto import AddDocRequest
+from doc_ingestion.dto.Doc_dto import AddDocRequest
 from fastapi import HTTPException
-from rag_project.doc_ingestion.tasks.ingest_tasks import ingest_document
-from rag_project.doc_ingestion.services.add_pdf import ingest_pdf
+from doc_ingestion.tasks.ingest_tasks import ingest_document
+from doc_ingestion.services.add_pdf import ingest_pdf
 import tempfile
 import httpx
 from pathlib import Path

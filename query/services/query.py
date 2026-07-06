@@ -2,11 +2,11 @@ import asyncio
 import time
 from dotenv import load_dotenv
 from langchain_huggingface import HuggingFaceEmbeddings
-from rag_project.config.db import qdrant
+from config.db import qdrant
 
-from rag_project.query.llmops.config_loader import load_config
-from rag_project.query.llmops.model_router import ModelRouter
-from rag_project.query.llmops.guardrails import sanitize_input, validate_llm_output
+from query.llmops.config_loader import load_config
+from query.llmops.model_router import ModelRouter
+from query.llmops.guardrails import sanitize_input, validate_llm_output
 
 load_dotenv()
 

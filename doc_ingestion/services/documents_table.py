@@ -1,9 +1,9 @@
-from rag_project.doc_ingestion.models.documents import Document
+from doc_ingestion.models.documents import Document
 from datetime import datetime
 import hashlib
 from pathlib import Path
 from sqlalchemy.orm import Session
-from rag_project.doc_ingestion.models.chunks import Chunk
+from doc_ingestion.models.chunks import Chunk
 
 
 def compute_file_hash(file_path: Path) -> str:

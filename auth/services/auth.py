@@ -2,7 +2,7 @@ from typing import Any
 
 from fastapi import HTTPException, Request, status
 
-from rag_project.config.db import supabase
+from config.db import supabase
 
 
 def _auth_error(detail: str, code: int = status.HTTP_400_BAD_REQUEST) -> HTTPException:

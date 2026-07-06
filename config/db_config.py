@@ -3,7 +3,7 @@ from urllib.parse import quote_plus
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
-from rag_project.config.settings import settings
+from config.settings import settings
 
 
 def _database_url() -> str:

@@ -1,5 +1,5 @@
 from sqlalchemy import Column, String, TIMESTAMP, BigInteger
-from rag_project.doc_ingestion.models.base import Base
+from doc_ingestion.models.base import Base
 
 
 class Document(Base):

@@ -1,5 +1,5 @@
 
-from rag_project.query.models.intent import Intent
+from query.models.intent import Intent
 
 
 def insert_intent(db,query: str, intent_res: str):

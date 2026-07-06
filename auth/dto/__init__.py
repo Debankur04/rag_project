@@ -1,4 +1,4 @@
-from rag_project.auth.dto.Auth_dto import (
+from auth.dto.Auth_dto import (
     ForgotPasswordRequest,
     LoginRequest,
     RefreshTokenRequest,

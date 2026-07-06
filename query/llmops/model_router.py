@@ -9,7 +9,7 @@ import time
 from collections import deque
 from dataclasses import dataclass, field
 from enum import Enum
-from rag_project.query.controllers.add_intent import insert_intent
+from query.controllers.add_intent import insert_intent
 
 
 
@@ -85,7 +85,7 @@ class ModelRouter:
         rules = self.config["routing_rules"]
 
         if rules.get("use_intent_classifier", False):
-            from rag_project.query.llmops.intent_classifier import IntentClassifier
+            from llmops.intent_classifier import IntentClassifier
             classifier = IntentClassifier(model_name=self.config["models"][rules["simple_query_model"]]["model_name"])
             intent_res = classifier.classify(query)
             if db:

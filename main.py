@@ -5,14 +5,14 @@ from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 from starlette.middleware import Middleware
 
-from rag_project.auth.controllers.auth import router as auth_router
-from rag_project.config.db_config import get_db
-from rag_project.doc_ingestion.controllers.health import health_check
-from rag_project.doc_ingestion.controllers.routes import router as doc_ingestion_router
-from rag_project.doc_ingestion.models.init_db import init_db as init_doc_ingestion_db
-from rag_project.query.controllers.routes import router as query_router
-from rag_project.query.middleware.rate_limiter import RateLimitMiddleware
-from rag_project.query.models.init_db import init_db as init_query_db
+from auth.controllers.auth import router as auth_router
+from config.db_config import get_db
+from doc_ingestion.controllers.health import health_check
+from doc_ingestion.controllers.routes import router as doc_ingestion_router
+from doc_ingestion.models.init_db import init_db as init_doc_ingestion_db
+from query.controllers.routes import router as query_router
+from query.middleware.rate_limiter import RateLimitMiddleware
+from query.models.init_db import init_db as init_query_db
 
 
 middleware = [Middleware(RateLimitMiddleware)]

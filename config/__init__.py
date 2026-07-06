@@ -1,3 +1,3 @@
-from rag_project.config.settings import settings
+from config.settings import settings
 
 __all__ = ["settings"]

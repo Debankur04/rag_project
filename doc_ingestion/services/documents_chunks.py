@@ -1,8 +1,8 @@
-from rag_project.config.db import qdrant
+from config.db import qdrant
 from datetime import datetime
 
-from rag_project.doc_ingestion.models.chunks import Chunk
-from rag_project.doc_ingestion.models.documents import Document
+from doc_ingestion.models.chunks import Chunk
+from doc_ingestion.models.documents import Document
 from datetime import datetime
 
 def bulk_insert_chunks(db, chunk_data_list):

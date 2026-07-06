@@ -1,10 +1,10 @@
 from uuid import uuid4
 
-from rag_project.query.dto.Query_dto import NewQueryRequest, NewQueryResponse
-from rag_project.query.services.cache import query_cache
-from rag_project.query.services.query import run_query
-from rag_project.query.services.prompt import prompt_builder
-from rag_project.query.services.mongo_logger import log_query_async
+from query.dto.Query_dto import NewQueryRequest, NewQueryResponse
+from query.services.cache import query_cache
+from query.services.query import run_query
+from query.services.prompt import prompt_builder
+from query.services.mongo_logger import log_query_async
 
 
 async def query_controller(payload: NewQueryRequest) -> NewQueryResponse:

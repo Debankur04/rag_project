@@ -1,7 +1,7 @@
 from fastapi import APIRouter
 
-from rag_project.query.controllers.query import query_controller
-from rag_project.query.dto.Query_dto import NewQueryRequest, NewQueryResponse
+from query.controllers.query import query_controller
+from query.dto.Query_dto import NewQueryRequest, NewQueryResponse
 
 
 router = APIRouter(tags=["query"])

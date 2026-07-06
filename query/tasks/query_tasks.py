@@ -2,11 +2,11 @@ import asyncio
 import logging
 from datetime import datetime
 from celery.utils.log import get_task_logger
-from rag_project.query.services.celery_app import celery_app
-from rag_project.query.services.cache import query_cache
-from rag_project.query.services.mongo_logger import log_query_sync
-from rag_project.query.services.query import run_query
-from rag_project.query.services.prompt import prompt_builder
+from query.services.celery_app import celery_app
+from query.services.cache import query_cache
+from query.services.mongo_logger import log_query_sync
+from query.services.query import run_query
+from query.services.prompt import prompt_builder
 
 logger = get_task_logger(__name__)
 

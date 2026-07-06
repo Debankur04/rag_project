@@ -4,7 +4,7 @@ from abc import ABC, abstractmethod
 from typing import Optional
 
 import redis
-from rag_project.config.settings import settings
+from config.settings import settings
 
 logger = logging.getLogger(__name__)
 

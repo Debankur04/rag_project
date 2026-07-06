@@ -1,9 +1,9 @@
 from qdrant_client import models
-from rag_project.config.db import qdrant
-from rag_project.doc_ingestion.services.documents_chunks import get_chunks_for_document, delete_chunks_for_document
-from rag_project.doc_ingestion.services.documents_table import mark_document_deleted
-from rag_project.doc_ingestion.models.chunks import Chunk
-from rag_project.doc_ingestion.models.documents import Document
+from config.db import qdrant
+from doc_ingestion.services.documents_chunks import get_chunks_for_document, delete_chunks_for_document
+from doc_ingestion.services.documents_table import mark_document_deleted
+from doc_ingestion.models.chunks import Chunk
+from doc_ingestion.models.documents import Document
 
 
 def delete_document(

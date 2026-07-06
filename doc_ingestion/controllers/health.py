@@ -1,5 +1,5 @@
 from datetime import datetime
-from rag_project.config.db import supabase, qdrant
+from config.db import supabase, qdrant
 
 from sqlalchemy import text
 

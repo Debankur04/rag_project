@@ -2,8 +2,8 @@ import logging
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from fastapi import HTTPException
-from rag_project.query.services.redis_client import get_redis
-from rag_project.config.settings import settings
+from query.services.redis_client import get_redis
+from config.settings import settings
 
 logger = logging.getLogger(__name__)
 

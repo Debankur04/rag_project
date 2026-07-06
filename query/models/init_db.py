@@ -1,8 +1,8 @@
-from rag_project.config.db_config import engine
-from rag_project.query.models.base import Base
+from config.db_config import engine
+from query.models.base import Base
 
 # import ALL models so metadata registers them
-from rag_project.query.models.intent import Intent
+from query.models.intent import Intent
 
 
 def init_db():

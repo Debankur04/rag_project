@@ -2,7 +2,7 @@ import datetime
 import logging
 from pymongo import MongoClient
 from motor.motor_asyncio import AsyncIOMotorClient
-from rag_project.config.settings import settings
+from config.settings import settings
 
 logger = logging.getLogger(__name__)
 

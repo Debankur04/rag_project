@@ -1,5 +1,5 @@
 from sqlalchemy import Column, String
-from rag_project.query.models.base import Base
+from query.models.base import Base
 import uuid
 from sqlalchemy.dialects.postgresql import UUID
 

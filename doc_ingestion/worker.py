@@ -6,11 +6,11 @@ from pathlib import Path
 from uuid import uuid4
 
 import httpx
-from rag_project.doc_ingestion.services.add_pdf import ingest_pdf
-from rag_project.doc_ingestion.services.mongo_logger import log_ingestion_sync
-from rag_project.doc_ingestion.services.pubsub import pubsub
-from rag_project.config.db_config import SessionLocal
-from rag_project.config.settings import settings
+from doc_ingestion.services.add_pdf import ingest_pdf
+from doc_ingestion.services.mongo_logger import log_ingestion_sync
+from doc_ingestion.services.pubsub import pubsub
+from config.db_config import SessionLocal
+from config.settings import settings
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")

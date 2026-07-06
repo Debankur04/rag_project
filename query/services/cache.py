@@ -2,8 +2,8 @@ import hashlib
 import json
 from typing import Any, Optional
 
-from rag_project.config.settings import settings
-from rag_project.query.services.redis_client import get_redis
+from config.settings import settings
+from query.services.redis_client import get_redis
 
 
 class QueryCache:

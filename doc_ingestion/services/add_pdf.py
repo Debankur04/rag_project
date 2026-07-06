@@ -15,11 +15,11 @@ from qdrant_client.models import Distance, VectorParams
 from qdrant_client import models
 
 # from supabase_operations import db_operations
-from rag_project.doc_ingestion.services.documents_table import compute_file_hash, get_existing_document, create_document, mark_document_ingested, mark_document_failed, mark_document_processing
-from rag_project.doc_ingestion.services.documents_chunks import bulk_insert_chunks, delete_chunks_for_document
-from rag_project.config.db import qdrant
-from rag_project.doc_ingestion.services.pubsub import pubsub
-from rag_project.config.settings import settings
+from doc_ingestion.services.documents_table import compute_file_hash, get_existing_document, create_document, mark_document_ingested, mark_document_failed, mark_document_processing
+from doc_ingestion.services.documents_chunks import bulk_insert_chunks, delete_chunks_for_document
+from config.db import qdrant
+from doc_ingestion.services.pubsub import pubsub
+from config.settings import settings
 
 CHUNK_SIZE = 1000
 CHUNK_OVERLAP = 200

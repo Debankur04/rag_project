@@ -5,8 +5,8 @@ import os
 # Add the current directory to sys.path to allow imports
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
-from rag_project.query.dto.Query_dto import NewQueryRequest
-from rag_project.query.services.worker import start_workers, task_queue
+from query.dto.Query_dto import NewQueryRequest
+from query.services.worker import start_workers, task_queue
 
 async def test_flow():
     # 1. Start workers

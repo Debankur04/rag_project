@@ -1,5 +1,5 @@
 from celery import Celery
-from rag_project.config.settings import settings
+from config.settings import settings
 
 celery_app = Celery(
     "doc_ingestion",

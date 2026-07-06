@@ -1,8 +1,8 @@
 import asyncio
 from typing import List
-from rag_project.query.services.query import run_query
-from rag_project.query.services.prompt import prompt_builder
-from rag_project.config.db_config import SessionLocal
+from query.services.query import run_query
+from query.services.prompt import prompt_builder
+from config.db_config import SessionLocal
 
 # Global queue for background tasks
 task_queue: asyncio.Queue = asyncio.Queue()
