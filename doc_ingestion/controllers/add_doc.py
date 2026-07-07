@@ -1,51 +1,47 @@
-from uuid import uuid4
-from doc_ingestion.dto.Doc_dto import AddDocRequest
-from fastapi import HTTPException
-from doc_ingestion.tasks.ingest_tasks import ingest_document
-from doc_ingestion.services.add_pdf import ingest_pdf
 import tempfile
-import httpx
 from pathlib import Path
+from shutil import copyfileobj
 from uuid import uuid4
 
+from fastapi import HTTPException, UploadFile
+
+from doc_ingestion.services.add_pdf import ingest_pdf
 
 
-def add_doc(payload: AddDocRequest,db):
+def add_doc(tenant_id: int, file: UploadFile, db):
     ingestion_id = str(uuid4())
+    temp_path: Path | None = None
 
     try:
-        # 1. Create temp path
+        file_name = Path(file.filename or "document.pdf").name
+        if not file_name.lower().endswith(".pdf"):
+            raise HTTPException(status_code=400, detail="Only PDF uploads are supported")
+
         temp_dir = Path(tempfile.gettempdir()) / "doc_ingestion"
         temp_dir.mkdir(parents=True, exist_ok=True)
+        temp_path = temp_dir / f"{uuid4()}_{file_name}"
 
-        temp_path = temp_dir / f"{uuid4()}_{payload.file_name}"
+        with temp_path.open("wb") as buffer:
+            copyfileobj(file.file, buffer)
 
-        ingest_document.delay(
-            payload.tenant_id,
-            payload.file_name,
-            payload.supabase_url,
-            ingestion_id,
-        )
-
-        # 2. Download file from Supabase
-        with httpx.Client(timeout=60.0) as client:
-            response = client.get(payload.supabase_url)
-            response.raise_for_status()
-            temp_path.write_bytes(response.content)
-
-        # 3. Pass REAL FILE PATH
-        ingest_pdf(
+        result = ingest_pdf(
             db,
-            tenant_id=payload.tenant_id,
-            file_path=str(temp_path),  # ✅ THIS is the fix
-            url=payload.supabase_url
+            tenant_id=str(tenant_id),
+            file_path=str(temp_path),
+            source=file_name,
         )
 
         return {
             "message": "Document ingestion completed",
             "ingestion_id": ingestion_id,
             "status": "success",
+            "document": result,
         }
 
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        if temp_path and temp_path.exists():
+            temp_path.unlink(missing_ok=True)
