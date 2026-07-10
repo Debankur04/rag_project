@@ -8,7 +8,7 @@ from fastapi import HTTPException, UploadFile
 from doc_ingestion.services.add_pdf import ingest_pdf
 
 
-def add_doc(tenant_id: int, file: UploadFile, db):
+def add_doc(tenant_id: int, file: UploadFile):
     ingestion_id = str(uuid4())
     temp_path: Path | None = None
 
@@ -25,7 +25,6 @@ def add_doc(tenant_id: int, file: UploadFile, db):
             copyfileobj(file.file, buffer)
 
         result = ingest_pdf(
-            db,
             tenant_id=str(tenant_id),
             file_path=str(temp_path),
             source=file_name,

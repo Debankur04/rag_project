@@ -1,57 +1,42 @@
 from qdrant_client import models
-from config.db import qdrant
-from doc_ingestion.services.documents_chunks import get_chunks_for_document, delete_chunks_for_document
+
+from config.db import qdrant, supabase
+from doc_ingestion.services.documents_chunks import (
+    delete_chunks_for_document,
+    get_chunks_for_document,
+)
 from doc_ingestion.services.documents_table import mark_document_deleted
-from doc_ingestion.models.chunks import Chunk
-from doc_ingestion.models.documents import Document
 
 
-def delete_document(
-    db,
-    tenant_id: str,
-    doc_id: str,
-):
-    # Ensure doc_id is an integer for SQLAlchemy
+def delete_document(tenant_id: str, doc_id: str):
     doc_id_int = int(doc_id)
-    print(f"[*] Attempting to delete document {doc_id_int} for tenant {tenant_id}")
-
-    vector_ids = get_chunks_for_document(db, doc_id_int)
-    print(f"[*] Found {len(vector_ids)} chunks in Qdrant to delete")
+    vector_ids = get_chunks_for_document(doc_id_int)
 
     if vector_ids:
         qdrant.delete(
             collection_name=f"tenant_{tenant_id}",
-            points_selector=models.PointIdsList(
-                points=vector_ids
-            )
+            points_selector=models.PointIdsList(points=vector_ids),
         )
-        print(f"[*] Deleted points from Qdrant collection tenant_{tenant_id}")
+
+    deleted_chunks = delete_chunks_for_document(doc_id_int)
+    mark_document_deleted(doc_id_int)
+
+    return {
+        "document_id": doc_id_int,
+        "deleted_chunks": deleted_chunks,
+        "deleted_vectors": len(vector_ids),
+    }
 
 
-    num_chunks_deleted = delete_chunks_for_document(db, doc_id_int)
-    print(f"[*] Deleted {num_chunks_deleted} chunk entries from SQL")
+def delete_tenant(tenant_id: str):
+    tenant_id_int = int(tenant_id)
 
-    mark_document_deleted(db, doc_id_int)
-    print(f"[*] Document {doc_id_int} marked as deleted in SQL")
-
-
-
-
-
-def delete_tenant(db, tenant_id: str):
     try:
         qdrant.delete_collection(f"tenant_{tenant_id}")
-        print(f"[*] Deleted Qdrant collection tenant_{tenant_id}")
-    except Exception as e:
-        print(f"[!] Qdrant collection delete skipped: {e}")
-    
-    # Delete from SQL
-    try:
-        tenant_id_int = int(tenant_id)
-        db.query(Chunk).filter(Chunk.tenant_id == tenant_id_int).delete()
-        db.query(Document).filter(Document.tenant_id == tenant_id_int).delete()
-        db.commit()
-        print(f"[*] Deleted all SQL entries for tenant {tenant_id_int}")
-    except Exception as e:
-        db.rollback()
-        print(f"[!] SQL cleanup for tenant {tenant_id} failed: {e}")
+    except Exception:
+        pass
+
+    supabase.table("chunks").delete().eq("tenant_id", tenant_id_int).execute()
+    supabase.table("doc").delete().eq("tenant_id", tenant_id_int).execute()
+
+    return {"tenant_id": tenant_id_int, "status": "deleted"}

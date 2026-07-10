@@ -1,72 +1,64 @@
-from config.db import qdrant
 from datetime import datetime
 
-from doc_ingestion.models.chunks import Chunk
-from doc_ingestion.models.documents import Document
-from datetime import datetime
+from config.db import supabase
 
-def bulk_insert_chunks(db, chunk_data_list):
-    chunks = [
-        Chunk(
-            document_id=data["document_id"],
-            tenant_id=data["tenant_id"],
-            vector_id=data["vector_id"],
-            chunk_index=data["chunk_index"],
-            created_at=datetime.utcnow()
-        )
+
+CHUNK_TABLE = "chunks"
+DOC_TABLE = "doc"
+
+
+def _utc_now() -> str:
+    return datetime.utcnow().isoformat()
+
+
+def bulk_insert_chunks(chunk_data_list):
+    if not chunk_data_list:
+        return []
+
+    rows = [
+        {
+            "document_id": data["document_id"],
+            "tenant_id": data["tenant_id"],
+            "vector_id": data["vector_id"],
+            "chunk_index": data["chunk_index"],
+            "created_at": _utc_now(),
+        }
         for data in chunk_data_list
     ]
-    db.add_all(chunks)
-    # No db.commit() here! We let the caller handle the transaction
-    return chunks
+    response = supabase.table(CHUNK_TABLE).insert(rows).execute()
+    return response.data or []
 
 
-def get_chunks_for_document(db, document_id):
-    chunks = (
-        db.query(Chunk.vector_id)
-        .filter(Chunk.document_id == document_id)
-        .all()
+def get_chunks_for_document(document_id):
+    response = (
+        supabase.table(CHUNK_TABLE)
+        .select("vector_id")
+        .eq("document_id", int(document_id))
+        .execute()
     )
-
-    # match old Supabase output style (list of vector_ids)
-    return [c[0] for c in chunks]
+    return [row["vector_id"] for row in response.data or [] if row.get("vector_id")]
 
 
+def delete_chunks_for_document(document_id):
+    existing = get_chunks_for_document(document_id)
+    supabase.table(CHUNK_TABLE).delete().eq("document_id", int(document_id)).execute()
+    return len(existing)
 
-def delete_chunks_for_document(db, document_id):
-    deleted = (
-        db.query(Chunk)
-        .filter(Chunk.document_id == document_id)
-        .delete()
+
+def list_documents_for_tenant(tenant_id):
+    response = (
+        supabase.table(DOC_TABLE)
+        .select("id,filename,status,created_at")
+        .eq("tenant_id", int(tenant_id))
+        .neq("status", "deleted")
+        .execute()
     )
-
-    db.commit()
-    return deleted
-
-
-
-def list_documents_for_tenant(db, tenant_id):
-    docs = (
-        db.query(
-            Document.id,
-            Document.source_name,
-            Document.status,
-            Document.created_at
-        )
-        .filter(
-            Document.tenant_id == tenant_id,
-            Document.status != "deleted"
-        )
-        .all()
-    )
-
-    # convert to dict (like Supabase response)
     return [
         {
-            "id": d.id,
-            "source_name": d.source_name,
-            "status": d.status,
-            "created_at": d.created_at
+            "id": row["id"],
+            "source_name": row.get("filename"),
+            "status": row.get("status"),
+            "created_at": row.get("created_at"),
         }
-        for d in docs
+        for row in response.data or []
     ]

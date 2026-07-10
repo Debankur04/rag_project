@@ -1,18 +1,14 @@
 from contextlib import asynccontextmanager
 
-from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
-from sqlalchemy.orm import Session
 from starlette.middleware import Middleware
 
 from auth.controllers.auth import router as auth_router
-from config.db_config import get_db
 from doc_ingestion.controllers.health import health_check
 from doc_ingestion.controllers.routes import router as doc_ingestion_router
-from doc_ingestion.models.init_db import init_db as init_doc_ingestion_db
 from query.controllers.routes import router as query_router
 from query.middleware.rate_limiter import RateLimitMiddleware
-from query.models.init_db import init_db as init_query_db
 
 
 middleware = [Middleware(RateLimitMiddleware)]
@@ -20,8 +16,6 @@ middleware = [Middleware(RateLimitMiddleware)]
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    init_doc_ingestion_db()
-    init_query_db()
     yield
 
 
@@ -44,8 +38,8 @@ async def root():
 
 
 @app.get("/health")
-async def health(db: Session = Depends(get_db)):
-    return health_check(db)
+async def health():
+    return health_check()
 
 
 app.include_router(query_router)

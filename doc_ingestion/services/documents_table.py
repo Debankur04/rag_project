@@ -1,9 +1,21 @@
-from doc_ingestion.models.documents import Document
-from datetime import datetime
 import hashlib
+from datetime import datetime
 from pathlib import Path
-from sqlalchemy.orm import Session
-from doc_ingestion.models.chunks import Chunk
+from types import SimpleNamespace
+
+from config.db import supabase
+
+
+DOC_TABLE = "doc"
+CHUNK_TABLE = "chunks"
+
+
+def _utc_now() -> str:
+    return datetime.utcnow().isoformat()
+
+
+def _as_obj(row: dict | None):
+    return SimpleNamespace(**row) if row else None
 
 
 def compute_file_hash(file_path: Path) -> str:
@@ -14,102 +26,81 @@ def compute_file_hash(file_path: Path) -> str:
     return hasher.hexdigest()
 
 
-def get_existing_document(db: Session, tenant_id: int, content_hash: str):
-    # Find ingested documents with the same hash
-    docs = (
-        db.query(Document)
-        .filter(
-            Document.tenant_id == tenant_id,
-            Document.content_hash == content_hash,
-            Document.status == "ingested"
-        )
-        .all()
+def get_existing_document(tenant_id: int, content_hash: str):
+    response = (
+        supabase.table(DOC_TABLE)
+        .select("*")
+        .eq("tenant_id", tenant_id)
+        .eq("content_hash", content_hash)
+        .eq("status", "ingested")
+        .execute()
     )
 
-    # Validate that the document ACTUALLY has chunks
-    for doc in docs:
-        chunk_count = db.query(Chunk).filter(Chunk.document_id == doc.id).count()
-        if chunk_count > 0:
-            return doc
-        else:
-            # Document is marked ingested but has no chunks - fix its state
-            doc.status = "failed"
-            db.commit()
+    for doc in response.data or []:
+        chunks = (
+            supabase.table(CHUNK_TABLE)
+            .select("id")
+            .eq("document_id", doc["id"])
+            .execute()
+        )
+        if chunks.data:
+            return _as_obj(doc)
+
+        supabase.table(DOC_TABLE).update(
+            {"status": "failed", "updated_at": _utc_now()}
+        ).eq("id", doc["id"]).execute()
 
     return None
 
 
 def create_document(
-    db: Session,
     tenant_id: int,
     file_name: str,
     file_path: Path,
-    file_url: str   # ✅ added
+    file_url: str,
 ):
     content_hash = compute_file_hash(file_path)
-
-    # 🔥 prevent duplicate ingestion
-    existing = get_existing_document(db, tenant_id, content_hash)
+    existing = get_existing_document(tenant_id, content_hash)
     if existing:
         return existing.id, content_hash, existing
 
-    try:
-        doc = Document(
-            tenant_id=tenant_id,
-            filename=file_name,        # ✅ fixed
-            url=file_url,              # ✅ added
-            content_hash=content_hash,
-            status="pending",
-            created_at=datetime.utcnow()
-        )
+    payload = {
+        "tenant_id": tenant_id,
+        "filename": file_name,
+        "url": file_url,
+        "content_hash": content_hash,
+        "status": "pending",
+        "created_at": _utc_now(),
+    }
+    response = supabase.table(DOC_TABLE).insert(payload).execute()
+    row = (response.data or [None])[0]
+    if not row:
+        raise RuntimeError("Supabase did not return the created document")
 
-        db.add(doc)
-        db.commit()
-        db.refresh(doc)
-
-        return doc.id, content_hash, doc
-
-    except Exception as e:
-        db.rollback()
-        raise e
+    return row["id"], content_hash, _as_obj(row)
 
 
-def mark_document_processing(db: Session, document_id: int):
-    doc = db.query(Document).filter(Document.id == document_id).first()
-    if doc:
-        doc.status = "processing"
-        doc.updated_at = datetime.utcnow()
-        db.commit()
-    return doc
-
-def mark_document_ingested(db: Session, document_id: int):
-    doc = db.query(Document).filter(Document.id == document_id).first()
-
-    if doc:
-        doc.status = "ingested"
-        doc.updated_at=datetime.utcnow()
-        db.commit()
-
-    return doc
+def _mark_document(document_id: int, status: str):
+    response = (
+        supabase.table(DOC_TABLE)
+        .update({"status": status, "updated_at": _utc_now()})
+        .eq("id", document_id)
+        .execute()
+    )
+    return _as_obj((response.data or [None])[0])
 
 
-def mark_document_failed(db: Session, document_id: int):
-    doc = db.query(Document).filter(Document.id == document_id).first()
-
-    if doc:
-        doc.status = "failed"
-        doc.updated_at=datetime.utcnow()
-        db.commit()
-
-    return doc
+def mark_document_processing(document_id: int):
+    return _mark_document(document_id, "processing")
 
 
-def mark_document_deleted(db: Session, document_id: int):
-    doc = db.query(Document).filter(Document.id == document_id).first()
+def mark_document_ingested(document_id: int):
+    return _mark_document(document_id, "ingested")
 
-    if doc:
-        doc.status = "deleted"
-        doc.updated_at=datetime.utcnow()
-        db.commit()
 
-    return doc
+def mark_document_failed(document_id: int):
+    return _mark_document(document_id, "failed")
+
+
+def mark_document_deleted(document_id: int):
+    return _mark_document(document_id, "deleted")

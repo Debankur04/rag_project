@@ -87,13 +87,12 @@ def _ensure_collection(tenant_id: str):
     )
 
 
-def ingest_pdf(db, tenant_id: str, file_path: str, source: str | None = None):
+def ingest_pdf(tenant_id: str, file_path: str, source: str | None = None):
     file_path_obj = Path(file_path)
     file_name = source or file_path_obj.name
     content_hash = compute_file_hash(file_path_obj)
 
     existing = get_existing_document(
-        db=db,
         tenant_id=int(tenant_id),
         content_hash=content_hash,
     )
@@ -107,13 +106,12 @@ def ingest_pdf(db, tenant_id: str, file_path: str, source: str | None = None):
         }
 
     document_id, _, _ = create_document(
-        db=db,
         tenant_id=int(tenant_id),
         file_name=file_name,
         file_path=file_path_obj,
         file_url=file_name,
     )
-    mark_document_processing(db, document_id)
+    mark_document_processing(document_id)
 
     inserted_vector_ids = []
 
@@ -161,9 +159,9 @@ def ingest_pdf(db, tenant_id: str, file_path: str, source: str | None = None):
         if not points:
             raise RuntimeError("No text chunks could be extracted from the document")
 
-        bulk_insert_chunks(db, chunk_data_list)
+        bulk_insert_chunks(chunk_data_list)
         qdrant.upsert(collection_name=f"tenant_{tenant_id}", points=points)
-        mark_document_ingested(db, document_id)
+        mark_document_ingested(document_id)
 
         return {
             "id": document_id,
@@ -175,7 +173,6 @@ def ingest_pdf(db, tenant_id: str, file_path: str, source: str | None = None):
         }
 
     except Exception:
-        db.rollback()
         if inserted_vector_ids:
             try:
                 qdrant.delete(
@@ -185,5 +182,5 @@ def ingest_pdf(db, tenant_id: str, file_path: str, source: str | None = None):
             except Exception as rollback_error:
                 print(f"Failed to roll back Qdrant vectors: {rollback_error}")
 
-        mark_document_failed(db, document_id)
+        mark_document_failed(document_id)
         raise

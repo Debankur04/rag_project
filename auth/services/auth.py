@@ -37,7 +37,7 @@ def register_user(email: str, password: str) -> dict[str, Any]:
     try:
         response = supabase.auth.sign_up({"email": email, "password": password})
         return {
-            "message": "Registration successful",
+            "message": "Registration successful. Please check your email and login again.",
             "user": _safe_user(getattr(response, "user", None)),
             "session": _session_payload(response) if getattr(response, "session", None) else None,
         }

@@ -2,17 +2,28 @@ import datetime
 import logging
 from typing import Optional
 
-from motor.motor_asyncio import AsyncIOMotorClient
-from pymongo import MongoClient
-from config.settings import settings
+from config.db import supabase
+
 
 logger = logging.getLogger(__name__)
+QUERY_LOG_TABLE = "query_logs"
 
-mongo_client = MongoClient(settings.MONGO_URI)
-mongo_async_client = AsyncIOMotorClient(settings.MONGO_URI)
 
-mongo_db = mongo_client[settings.MONGO_DB]
-mongo_async_db = mongo_async_client[settings.MONGO_DB]
+def _payload(
+    query_id: str,
+    query_text: str,
+    response: dict,
+    intent: Optional[str],
+    status: str,
+):
+    return {
+        "query_id": query_id,
+        "query_text": query_text,
+        "response": response,
+        "intent": intent or "unknown",
+        "status": status,
+        "timestamp": datetime.datetime.utcnow().isoformat(),
+    }
 
 
 async def log_query_async(
@@ -22,16 +33,9 @@ async def log_query_async(
     intent: Optional[str],
     status: str,
 ):
-    payload = {
-        "query_id": query_id,
-        "query_text": query_text,
-        "response": response,
-        "intent": intent or "unknown",
-        "status": status,
-        "timestamp": datetime.datetime.utcnow(),
-    }
-    await mongo_async_db.query_logs.insert_one(payload)
-    logger.debug("Async query log inserted for %s", query_id)
+    payload = _payload(query_id, query_text, response, intent, status)
+    supabase.table(QUERY_LOG_TABLE).insert(payload).execute()
+    logger.debug("Query log inserted for %s", query_id)
 
 
 def log_query_sync(
@@ -41,13 +45,6 @@ def log_query_sync(
     intent: Optional[str],
     status: str,
 ):
-    payload = {
-        "query_id": query_id,
-        "query_text": query_text,
-        "response": response,
-        "intent": intent or "unknown",
-        "status": status,
-        "timestamp": datetime.datetime.utcnow(),
-    }
-    mongo_db.query_logs.insert_one(payload)
-    logger.debug("Sync query log inserted for %s", query_id)
+    payload = _payload(query_id, query_text, response, intent, status)
+    supabase.table(QUERY_LOG_TABLE).insert(payload).execute()
+    logger.debug("Query log inserted for %s", query_id)

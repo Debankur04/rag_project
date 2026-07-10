@@ -14,19 +14,8 @@ class Settings(BaseSettings):
     RATE_LIMIT_REQUESTS: int = 10
     RATE_LIMIT_WINDOW_SECONDS: int = 60
 
-    MONGO_URI: str = "mongodb://localhost:27017"
-    MONGO_DB: str = "rag"
-
     GROQ_API_KEY: str | None = None
     GEMINI_API_KEY: str | None = None
-
-    DB_HOST: str = "localhost"
-    DB_PORT: str = "5432"
-    DB_NAME: str = "postgres"
-    DB_USER: str = "postgres"
-    DB_PASSWORD: str = ""
-    DB_SSLMODE: str = "verify-full"
-    DB_SSLROOTCERT: str | None = r"certs\prod-ca-2021.crt"
 
     @property
     def FINAL_SUPABASE_KEY(self) -> str:

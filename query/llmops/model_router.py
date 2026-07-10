@@ -85,11 +85,10 @@ class ModelRouter:
         rules = self.config["routing_rules"]
 
         if rules.get("use_intent_classifier", False):
-            from llmops.intent_classifier import IntentClassifier
+            from query.llmops.intent_classifier import IntentClassifier
             classifier = IntentClassifier(model_name=self.config["models"][rules["simple_query_model"]]["model_name"])
             intent_res = classifier.classify(query)
-            if db:
-                insert_intent(db=db, query=query, intent_res=intent_res)
+            insert_intent(query=query, intent_res=intent_res)
             if intent_res:
                 candidate = rules["simple_query_model"]
                 if self.health[candidate].is_healthy():

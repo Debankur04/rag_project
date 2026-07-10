@@ -1,15 +1,10 @@
+from config.db import supabase
 
-from query.models.intent import Intent
 
-
-def insert_intent(db,query: str, intent_res: str):
-    new_intent = Intent(
-        query = query,
-        intent = intent_res
+def insert_intent(query: str, intent_res: str):
+    response = (
+        supabase.table("intent")
+        .insert({"query": query, "intent": str(intent_res)})
+        .execute()
     )
-
-    db.add(new_intent)
-    db.commit()
-    db.refresh(new_intent)
-
-    return new_intent
+    return (response.data or [None])[0]
