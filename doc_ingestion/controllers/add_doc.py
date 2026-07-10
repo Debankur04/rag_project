@@ -5,8 +5,6 @@ from uuid import uuid4
 
 from fastapi import HTTPException, UploadFile
 
-from doc_ingestion.services.add_pdf import ingest_pdf
-
 
 def add_doc(tenant_id: int, file: UploadFile):
     ingestion_id = str(uuid4())
@@ -23,6 +21,8 @@ def add_doc(tenant_id: int, file: UploadFile):
 
         with temp_path.open("wb") as buffer:
             copyfileobj(file.file, buffer)
+
+        from doc_ingestion.services.add_pdf import ingest_pdf
 
         result = ingest_pdf(
             tenant_id=str(tenant_id),

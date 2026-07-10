@@ -90,10 +90,14 @@ def verify_request_token(request: Request) -> dict[str, Any]:
         raise _auth_error("Missing bearer token", status.HTTP_401_UNAUTHORIZED)
 
     try:
-        user = supabase.auth.get_user(token)
-        return {"user": _safe_user(getattr(user, "user", None))}
+        return {"user": get_user_from_access_token(token)}
     except Exception as exc:
         raise _auth_error("Invalid bearer token", status.HTTP_401_UNAUTHORIZED) from exc
+
+
+def get_user_from_access_token(token: str) -> dict[str, Any] | None:
+    user = supabase.auth.get_user(token)
+    return _safe_user(getattr(user, "user", None))
 
 
 def logout_request(request: Request) -> dict[str, str]:

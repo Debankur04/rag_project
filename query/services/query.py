@@ -1,14 +1,11 @@
 import asyncio
 import time
-from dotenv import load_dotenv
-from langchain_huggingface import HuggingFaceEmbeddings
+
 from config.db import qdrant
 
 from query.llmops.config_loader import load_config
 from query.llmops.model_router import ModelRouter
 from query.llmops.guardrails import sanitize_input, validate_llm_output
-
-load_dotenv()
 
 EMBED_MODEL_NAME = "all-MiniLM-L6-v2"
 
@@ -22,6 +19,8 @@ router = ModelRouter(config)
 def _get_embeddings():
     global embeddings
     if embeddings is None:
+        from langchain_huggingface import HuggingFaceEmbeddings
+
         embeddings = HuggingFaceEmbeddings(model_name=EMBED_MODEL_NAME)
     return embeddings
 

@@ -1,9 +1,9 @@
 from datetime import datetime
 
-from config.db import qdrant, supabase
-
 
 def health_check():
+    from config.db import qdrant, supabase
+
     status = {
         "status": "ok",
         "timestamp": datetime.utcnow().isoformat(),
@@ -18,8 +18,7 @@ def health_check():
     try:
         supabase.table("docs").select("id").limit(1).execute()
         status["services"]["supabase"] = "ok"
-    except Exception as e:
-        print(e)
+    except Exception:
         status["services"]["supabase"] = "error"
 
     try:

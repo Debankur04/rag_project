@@ -2,16 +2,6 @@ import os
 from pathlib import Path
 from uuid import uuid4
 
-import cv2
-import pytesseract
-from langchain_community.document_loaders import PyPDFLoader
-from langchain_core.documents import Document
-from langchain_huggingface import HuggingFaceEmbeddings
-from langchain_text_splitters import RecursiveCharacterTextSplitter
-from pdf2image import convert_from_path
-from qdrant_client import models
-from qdrant_client.models import Distance, VectorParams
-
 from config.db import qdrant
 from doc_ingestion.services.documents_chunks import bulk_insert_chunks
 from doc_ingestion.services.documents_table import (
@@ -33,11 +23,17 @@ embeddings = None
 def _get_embeddings():
     global embeddings
     if embeddings is None:
+        from langchain_huggingface import HuggingFaceEmbeddings
+
         embeddings = HuggingFaceEmbeddings(model_name=EMBED_MODEL_NAME)
     return embeddings
 
 
 def ocr_image(pdf_path: str) -> str:
+    import cv2
+    import pytesseract
+    from pdf2image import convert_from_path
+
     try:
         pages = convert_from_path(pdf_path)
         ocr_text = ""
@@ -62,6 +58,9 @@ def ocr_image(pdf_path: str) -> str:
 
 
 def read_pdf_with_fallback(file_path: str):
+    from langchain_community.document_loaders import PyPDFLoader
+    from langchain_core.documents import Document
+
     loader = PyPDFLoader(file_path)
     pages = loader.load()
 
@@ -76,6 +75,8 @@ def read_pdf_with_fallback(file_path: str):
 
 
 def _ensure_collection(tenant_id: str):
+    from qdrant_client.models import Distance, VectorParams
+
     collection_name = f"tenant_{tenant_id}"
     if qdrant.collection_exists(collection_name=collection_name):
         return
@@ -88,6 +89,9 @@ def _ensure_collection(tenant_id: str):
 
 
 def ingest_pdf(tenant_id: str, file_path: str, source: str | None = None):
+    from langchain_text_splitters import RecursiveCharacterTextSplitter
+    from qdrant_client import models
+
     file_path_obj = Path(file_path)
     file_name = source or file_path_obj.name
     content_hash = compute_file_hash(file_path_obj)

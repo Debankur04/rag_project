@@ -1,5 +1,3 @@
-from qdrant_client import models
-
 from config.db import qdrant, supabase
 from doc_ingestion.services.documents_chunks import (
     delete_chunks_for_document,
@@ -13,6 +11,8 @@ def delete_document(tenant_id: str, doc_id: str):
     vector_ids = get_chunks_for_document(doc_id_int)
 
     if vector_ids:
+        from qdrant_client import models
+
         qdrant.delete(
             collection_name=f"tenant_{tenant_id}",
             points_selector=models.PointIdsList(points=vector_ids),

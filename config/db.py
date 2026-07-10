@@ -2,9 +2,6 @@ from collections.abc import Callable
 from functools import cached_property
 from typing import Any
 
-from qdrant_client import QdrantClient
-from supabase import create_client
-
 from config.settings import settings
 
 
@@ -21,12 +18,16 @@ class LazyClient:
 
 
 def _create_supabase_client():
+    from supabase import create_client
+
     if not settings.SUPABASE_URL:
         raise RuntimeError("SUPABASE_URL must be set")
     return create_client(settings.SUPABASE_URL, settings.FINAL_SUPABASE_KEY)
 
 
 def _create_qdrant_client():
+    from qdrant_client import QdrantClient
+
     if not settings.QDRANT_URL:
         raise RuntimeError("QDRANT_URL must be set")
     return QdrantClient(url=settings.QDRANT_URL, api_key=settings.QDRANT_API_KEY)
