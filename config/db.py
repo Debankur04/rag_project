@@ -25,6 +25,16 @@ def _create_supabase_client():
     return create_client(settings.SUPABASE_URL, settings.FINAL_SUPABASE_KEY)
 
 
+def _create_supabase_auth_client():
+    from supabase import create_client
+
+    if not settings.SUPABASE_URL:
+        raise RuntimeError("SUPABASE_URL must be set")
+    if not settings.SUPABASE_KEY:
+        raise RuntimeError("SUPABASE_KEY must be set")
+    return create_client(settings.SUPABASE_URL, settings.SUPABASE_KEY)
+
+
 def _create_qdrant_client():
     from qdrant_client import QdrantClient
 
@@ -34,4 +44,5 @@ def _create_qdrant_client():
 
 
 supabase = LazyClient(_create_supabase_client)
+supabase_auth = LazyClient(_create_supabase_auth_client)
 qdrant = LazyClient(_create_qdrant_client)

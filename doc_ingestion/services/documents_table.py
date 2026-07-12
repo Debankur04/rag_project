@@ -6,7 +6,7 @@ from types import SimpleNamespace
 from config.db import supabase
 
 
-DOC_TABLE = "doc"
+DOC_TABLE = "docs"
 CHUNK_TABLE = "chunks"
 
 
@@ -26,11 +26,11 @@ def compute_file_hash(file_path: Path) -> str:
     return hasher.hexdigest()
 
 
-def get_existing_document(tenant_id: int, content_hash: str):
+def get_existing_document(user_id: int, content_hash: str):
     response = (
         supabase.table(DOC_TABLE)
         .select("*")
-        .eq("tenant_id", tenant_id)
+        .eq("user_id", user_id)
         .eq("content_hash", content_hash)
         .eq("status", "ingested")
         .execute()
@@ -54,18 +54,18 @@ def get_existing_document(tenant_id: int, content_hash: str):
 
 
 def create_document(
-    tenant_id: int,
+    user_id: int,
     file_name: str,
     file_path: Path,
     file_url: str,
 ):
     content_hash = compute_file_hash(file_path)
-    existing = get_existing_document(tenant_id, content_hash)
+    existing = get_existing_document(user_id, content_hash)
     if existing:
         return existing.id, content_hash, existing
 
     payload = {
-        "tenant_id": tenant_id,
+        "user_id": user_id,
         "filename": file_name,
         "url": file_url,
         "content_hash": content_hash,

@@ -1,7 +1,7 @@
 from fastapi import Request, status
 from fastapi.responses import JSONResponse
 
-from auth.services.auth import get_user_from_access_token
+from auth.services.auth import get_app_user_from_access_token
 
 
 PUBLIC_PATHS = {
@@ -37,7 +37,8 @@ async def access_token_middleware(request: Request, call_next):
         )
 
     try:
-        request.state.user = get_user_from_access_token(token)
+        request.state.app_user = get_app_user_from_access_token(token)
+        request.state.user = request.state.app_user["auth_user"]
     except Exception:
         return JSONResponse(
             status_code=status.HTTP_401_UNAUTHORIZED,

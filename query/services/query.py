@@ -60,7 +60,7 @@ async def _invoke_llm_with_router(user_query: str, system_prompt: str, user_tier
 
 
 async def run_query(
-    tenant_id: str,
+    user_id: int,
     user_query: str,
     prompt: str,
     db=None,
@@ -77,7 +77,7 @@ async def run_query(
 
     search_result = await asyncio.to_thread(
         qdrant.query_points,
-        collection_name=f"tenant_{tenant_id}",
+        collection_name=f"user_{user_id}",
         prefetch=[],
         query=embedding,
         limit=top_k

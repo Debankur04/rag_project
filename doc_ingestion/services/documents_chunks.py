@@ -4,7 +4,7 @@ from config.db import supabase
 
 
 CHUNK_TABLE = "chunks"
-DOC_TABLE = "doc"
+DOC_TABLE = "docs"
 
 
 def _utc_now() -> str:
@@ -18,9 +18,9 @@ def bulk_insert_chunks(chunk_data_list):
     rows = [
         {
             "document_id": data["document_id"],
-            "tenant_id": data["tenant_id"],
             "vector_id": data["vector_id"],
             "chunk_index": data["chunk_index"],
+            "content": data["content"],
             "created_at": _utc_now(),
         }
         for data in chunk_data_list
@@ -45,11 +45,11 @@ def delete_chunks_for_document(document_id):
     return len(existing)
 
 
-def list_documents_for_tenant(tenant_id):
+def list_documents_for_user(user_id):
     response = (
         supabase.table(DOC_TABLE)
         .select("id,filename,status,created_at")
-        .eq("tenant_id", int(tenant_id))
+        .eq("user_id", int(user_id))
         .neq("status", "deleted")
         .execute()
     )

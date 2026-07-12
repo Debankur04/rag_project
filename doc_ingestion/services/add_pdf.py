@@ -74,10 +74,10 @@ def read_pdf_with_fallback(file_path: str):
     return [Document(page_content=text, metadata={"source": file_path})]
 
 
-def _ensure_collection(tenant_id: str):
+def _ensure_collection(user_id: int):
     from qdrant_client.models import Distance, VectorParams
 
-    collection_name = f"tenant_{tenant_id}"
+    collection_name = f"user_{user_id}"
     if qdrant.collection_exists(collection_name=collection_name):
         return
 
@@ -88,7 +88,7 @@ def _ensure_collection(tenant_id: str):
     )
 
 
-def ingest_pdf(tenant_id: str, file_path: str, source: str | None = None):
+def ingest_pdf(user_id: int, file_path: str, source: str | None = None):
     from langchain_text_splitters import RecursiveCharacterTextSplitter
     from qdrant_client import models
 
@@ -97,20 +97,20 @@ def ingest_pdf(tenant_id: str, file_path: str, source: str | None = None):
     content_hash = compute_file_hash(file_path_obj)
 
     existing = get_existing_document(
-        tenant_id=int(tenant_id),
+        user_id=user_id,
         content_hash=content_hash,
     )
     if existing:
         return {
             "id": existing.id,
-            "tenant_id": existing.tenant_id,
+            "user_id": existing.user_id,
             "file_name": existing.filename,
             "status": existing.status,
             "duplicate": True,
         }
 
     document_id, _, _ = create_document(
-        tenant_id=int(tenant_id),
+        user_id=user_id,
         file_name=file_name,
         file_path=file_path_obj,
         file_url=file_name,
@@ -120,7 +120,7 @@ def ingest_pdf(tenant_id: str, file_path: str, source: str | None = None):
     inserted_vector_ids = []
 
     try:
-        _ensure_collection(tenant_id)
+        _ensure_collection(user_id)
 
         pages = read_pdf_with_fallback(str(file_path_obj))
         if not pages:
@@ -147,6 +147,7 @@ def ingest_pdf(tenant_id: str, file_path: str, source: str | None = None):
                         "source": file_name,
                         "chunk_index": index,
                         "text": chunk.page_content,
+                        "user_id": user_id,
                     },
                 )
             )
@@ -154,9 +155,9 @@ def ingest_pdf(tenant_id: str, file_path: str, source: str | None = None):
             chunk_data_list.append(
                 {
                     "document_id": document_id,
-                    "tenant_id": int(tenant_id),
                     "vector_id": vector_id,
                     "chunk_index": index,
+                    "content": chunk.page_content,
                 }
             )
 
@@ -164,12 +165,13 @@ def ingest_pdf(tenant_id: str, file_path: str, source: str | None = None):
             raise RuntimeError("No text chunks could be extracted from the document")
 
         bulk_insert_chunks(chunk_data_list)
-        qdrant.upsert(collection_name=f"tenant_{tenant_id}", points=points)
+        print('chunks inserted')
+        qdrant.upsert(collection_name=f"user_{user_id}", points=points)
         mark_document_ingested(document_id)
 
         return {
             "id": document_id,
-            "tenant_id": int(tenant_id),
+            "user_id": user_id,
             "file_name": file_name,
             "status": "ingested",
             "chunk_count": len(points),
@@ -180,7 +182,7 @@ def ingest_pdf(tenant_id: str, file_path: str, source: str | None = None):
         if inserted_vector_ids:
             try:
                 qdrant.delete(
-                    collection_name=f"tenant_{tenant_id}",
+                    collection_name=f"user_{user_id}",
                     points_selector=models.PointIdsList(points=inserted_vector_ids),
                 )
             except Exception as rollback_error:

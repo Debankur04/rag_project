@@ -6,15 +6,33 @@ from doc_ingestion.services.documents_chunks import (
 from doc_ingestion.services.documents_table import mark_document_deleted
 
 
-def delete_document(tenant_id: str, doc_id: str):
-    doc_id_int = int(doc_id)
-    vector_ids = get_chunks_for_document(doc_id_int)
+DOC_TABLE = "docs"
+CHUNK_TABLE = "chunks"
 
+
+def _document_belongs_to_user(doc_id: int, user_id: int) -> bool:
+    response = (
+        supabase.table(DOC_TABLE)
+        .select("id")
+        .eq("id", doc_id)
+        .eq("user_id", user_id)
+        .limit(1)
+        .execute()
+    )
+    return bool(response.data)
+
+
+def delete_document(user_id: int, doc_id: str):
+    doc_id_int = int(doc_id)
+    if not _document_belongs_to_user(doc_id_int, user_id):
+        raise ValueError("Document not found for current user")
+
+    vector_ids = get_chunks_for_document(doc_id_int)
     if vector_ids:
         from qdrant_client import models
 
         qdrant.delete(
-            collection_name=f"tenant_{tenant_id}",
+            collection_name=f"user_{user_id}",
             points_selector=models.PointIdsList(points=vector_ids),
         )
 
@@ -28,15 +46,21 @@ def delete_document(tenant_id: str, doc_id: str):
     }
 
 
-def delete_tenant(tenant_id: str):
-    tenant_id_int = int(tenant_id)
-
+def delete_user_documents(user_id: int):
     try:
-        qdrant.delete_collection(f"tenant_{tenant_id}")
+        qdrant.delete_collection(f"user_{user_id}")
     except Exception:
         pass
 
-    supabase.table("chunks").delete().eq("tenant_id", tenant_id_int).execute()
-    supabase.table("doc").delete().eq("tenant_id", tenant_id_int).execute()
+    docs = (
+        supabase.table(DOC_TABLE)
+        .select("id")
+        .eq("user_id", user_id)
+        .execute()
+    )
+    doc_ids = [row["id"] for row in docs.data or []]
+    for doc_id in doc_ids:
+        supabase.table(CHUNK_TABLE).delete().eq("document_id", doc_id).execute()
 
-    return {"tenant_id": tenant_id_int, "status": "deleted"}
+    supabase.table(DOC_TABLE).delete().eq("user_id", user_id).execute()
+    return {"user_id": user_id, "deleted_documents": len(doc_ids)}

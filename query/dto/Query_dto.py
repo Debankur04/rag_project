@@ -4,10 +4,11 @@ from pydantic import BaseModel
 
 class NewQueryRequest(BaseModel):
     text: str
-    tenant_id: int
+    conversation_id: Optional[int] = None
 
 
 class NewQueryResponse(BaseModel):
     query_id: str
+    conversation_id: Optional[int] = None
     answer: str
     token_usage: Optional[dict] = None

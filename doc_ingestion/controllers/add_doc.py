@@ -6,7 +6,7 @@ from uuid import uuid4
 from fastapi import HTTPException, UploadFile
 
 
-def add_doc(tenant_id: int, file: UploadFile):
+def add_doc(user_id: int, file: UploadFile):
     ingestion_id = str(uuid4())
     temp_path: Path | None = None
 
@@ -25,7 +25,7 @@ def add_doc(tenant_id: int, file: UploadFile):
         from doc_ingestion.services.add_pdf import ingest_pdf
 
         result = ingest_pdf(
-            tenant_id=str(tenant_id),
+            user_id=user_id,
             file_path=str(temp_path),
             source=file_name,
         )
@@ -44,3 +44,27 @@ def add_doc(tenant_id: int, file: UploadFile):
     finally:
         if temp_path and temp_path.exists():
             temp_path.unlink(missing_ok=True)
+
+
+def add_docs(user_id: int, files: list[UploadFile]):
+    results = []
+    for file in files:
+        try:
+            results.append(add_doc(user_id=user_id, file=file))
+        except HTTPException as exc:
+            results.append(
+                {
+                    "file_name": file.filename,
+                    "status": "failed",
+                    "error": exc.detail,
+                }
+            )
+
+    success_count = sum(1 for result in results if result.get("status") == "success")
+    return {
+        "message": "Bulk document ingestion completed",
+        "total": len(results),
+        "success": success_count,
+        "failed": len(results) - success_count,
+        "results": results,
+    }

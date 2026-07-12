@@ -1,10 +1,9 @@
-from fastapi import APIRouter, File, Form, UploadFile
+from fastapi import APIRouter, File, Request, UploadFile
 
-from doc_ingestion.controllers.add_doc import add_doc
+from doc_ingestion.controllers.add_doc import add_doc, add_docs
 from doc_ingestion.controllers.delete_doc import delete_doc
-from doc_ingestion.controllers.delete_tenant import delete_tenant_controller
+from doc_ingestion.controllers.delete_user_data import delete_user_data_controller
 from doc_ingestion.dto.Doc_dto import DeleteDocRequest
-from doc_ingestion.dto.Tenant_dto import DeleteTenant
 
 
 router = APIRouter(tags=["doc_ingestion"])
@@ -12,17 +11,25 @@ router = APIRouter(tags=["doc_ingestion"])
 
 @router.post("/add_doc")
 def add_doc_endpoint(
-    tenant_id: int = Form(...),
+    request: Request,
     file: UploadFile = File(...),
 ):
-    return add_doc(tenant_id=tenant_id, file=file)
+    return add_doc(user_id=request.state.app_user["id"], file=file)
+
+
+@router.post("/add_docs")
+def add_docs_endpoint(
+    request: Request,
+    files: list[UploadFile] = File(...),
+):
+    return add_docs(user_id=request.state.app_user["id"], files=files)
 
 
 @router.delete("/delete_doc")
-def delete_doc_endpoint(payload: DeleteDocRequest):
-    return delete_doc(payload)
+def delete_doc_endpoint(payload: DeleteDocRequest, request: Request):
+    return delete_doc(payload, user_id=request.state.app_user["id"])
 
 
-@router.delete("/delete_tenant")
-def delete_tenant_endpoint(payload: DeleteTenant):
-    return delete_tenant_controller(payload)
+@router.delete("/delete_user_data")
+def delete_user_data_endpoint(request: Request):
+    return delete_user_data_controller(user_id=request.state.app_user["id"])
