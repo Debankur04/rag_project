@@ -9,8 +9,9 @@ import time
 from collections import deque
 from dataclasses import dataclass, field
 from enum import Enum
-from query.controllers.add_intent import insert_intent
 
+from config.settings import settings
+from query.controllers.add_intent import insert_intent
 
 
 class ModelTier(Enum):
@@ -58,20 +59,27 @@ class ModelRouter:
             k: ModelHealth() for k in config["models"]
         }
         self._clients: dict[str, object] = {}
+        self._intent_classifiers: dict[str, object] = {}
 
     def _build_client(self, model_key: str):
         cfg = self.config["models"][model_key]
         if cfg["provider"] == "groq":
-            import os
             from langchain_groq import ChatGroq
 
-            return ChatGroq(model=cfg["model_name"], api_key=os.getenv("GROQ_API_KEY"))
+            if not settings.GROQ_API_KEY:
+                raise RuntimeError(
+                    f"GROQ_API_KEY must be set to use model '{model_key}'"
+                )
+            return ChatGroq(model=cfg["model_name"], api_key=settings.GROQ_API_KEY)
         elif cfg["provider"] == "gemini":
-            import os
             from langchain_google_genai import ChatGoogleGenerativeAI
 
+            if not settings.GEMINI_API_KEY:
+                raise RuntimeError(
+                    f"GEMINI_API_KEY must be set to use model '{model_key}'"
+                )
             return ChatGoogleGenerativeAI(
-                model=cfg["model_name"], google_api_key=os.getenv("GEMINI_API_KEY")
+                model=cfg["model_name"], google_api_key=settings.GEMINI_API_KEY
             )
         raise ValueError(f"Unknown provider: {cfg['provider']}")
 
@@ -86,9 +94,20 @@ class ModelRouter:
 
         if rules.get("use_intent_classifier", False):
             from query.llmops.intent_classifier import IntentClassifier
-            classifier = IntentClassifier(model_name=self.config["models"][rules["simple_query_model"]]["model_name"])
+
+            classifier_model = self.config["models"][rules["simple_query_model"]][
+                "model_name"
+            ]
+            if classifier_model not in self._intent_classifiers:
+                self._intent_classifiers[classifier_model] = IntentClassifier(
+                    model_name=classifier_model
+                )
+            classifier = self._intent_classifiers[classifier_model]
             intent_res = classifier.classify(query)
-            insert_intent(query=query, intent_res=intent_res)
+            try:
+                insert_intent(query=query, intent_res=intent_res)
+            except Exception as exc:
+                print(f"Intent logging skipped: {exc}")
             if intent_res:
                 candidate = rules["simple_query_model"]
                 if self.health[candidate].is_healthy():
@@ -99,7 +118,7 @@ class ModelRouter:
             if self.health[model_key].is_healthy():
                 return model_key
 
-        raise RuntimeError("All models unhealthy — serving degraded response")
+        raise RuntimeError("All models unhealthy - serving degraded response")
 
     def record_success(self, model_key: str, latency_ms: float):
         h = self.health[model_key]

@@ -1,4 +1,6 @@
 from contextlib import asynccontextmanager
+import time
+from uuid import uuid4
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.openapi.utils import get_openapi
@@ -7,6 +9,7 @@ from starlette.middleware import Middleware
 
 from auth.controllers.auth import router as auth_router
 from auth.middleware import PUBLIC_PATHS, access_token_middleware
+from config.timing import print_timing, timing_enabled
 from doc_ingestion.controllers.health import health_check
 from doc_ingestion.controllers.routes import router as doc_ingestion_router
 from query.controllers.routes import router as query_router
@@ -30,6 +33,33 @@ app = FastAPI(
 
 
 app.middleware("http")(access_token_middleware)
+
+
+@app.middleware("http")
+async def api_timing_middleware(request: Request, call_next):
+    if not timing_enabled():
+        return await call_next(request)
+
+    request_id = request.headers.get("x-request-id") or str(uuid4())
+    request.state.request_id = request_id
+    start = time.perf_counter()
+    status_code = 500
+
+    try:
+        response = await call_next(request)
+        status_code = response.status_code
+        response.headers["x-request-id"] = request_id
+        return response
+    finally:
+        elapsed_ms = (time.perf_counter() - start) * 1000
+        print_timing(
+            "api.total",
+            elapsed_ms,
+            request_id=request_id,
+            method=request.method,
+            path=request.url.path,
+            status_code=status_code,
+        )
 
 
 @app.exception_handler(HTTPException)

@@ -14,7 +14,11 @@ router = APIRouter(tags=["query"])
 async def query_endpoint(payload: NewQueryRequest, request: Request):
     from query.controllers.query import query_controller
 
-    return await query_controller(payload, user_id=request.state.app_user["id"])
+    return await query_controller(
+        payload,
+        user_id=request.state.app_user["id"],
+        request_id=getattr(request.state, "request_id", None),
+    )
 
 
 @router.post("/conversations")

@@ -2,6 +2,7 @@ import asyncio
 import time
 
 from config.db import qdrant
+from config.timing import async_timed_stage, timed_stage
 
 from query.llmops.config_loader import load_config
 from query.llmops.model_router import ModelRouter
@@ -24,14 +25,27 @@ def _get_embeddings():
         embeddings = HuggingFaceEmbeddings(model_name=EMBED_MODEL_NAME)
     return embeddings
 
-async def _invoke_llm_with_router(user_query: str, system_prompt: str, user_tier: str = "standard", db=None):
+
+async def _invoke_llm_with_router(
+    user_query: str,
+    system_prompt: str,
+    user_tier: str = "standard",
+    db=None,
+    request_id: str | None = None,
+):
     # Dynamically select the best model using the router
-    model_key = router.select_model(user_query, user_tier=user_tier, db=db)
-    client = router.get_client(model_key)
+    with timed_stage("query.llm.select_model", request_id=request_id):
+        model_key = router.select_model(user_query, user_tier=user_tier, db=db)
+        client = router.get_client(model_key)
     
     start_time = time.time()
     try:
-        res = await client.ainvoke(system_prompt)
+        async with async_timed_stage(
+            "query.llm.invoke",
+            request_id=request_id,
+            model=model_key,
+        ):
+            res = await client.ainvoke(system_prompt)
         latency_ms = (time.time() - start_time) * 1000
         router.record_success(model_key, latency_ms)
         
@@ -64,50 +78,76 @@ async def run_query(
     user_query: str,
     prompt: str,
     db=None,
-    top_k: int = 5
+    top_k: int = 5,
+    request_id: str | None = None,
 ):
     # Guardrails: Sanitize both the user query and prompt to extract clean text
-    sanitized_query_data = sanitize_input(user_query)
-    clean_user_query = sanitized_query_data["clean_text"]
-    
-    sanitized_prompt_data = sanitize_input(prompt)
-    clean_prompt = sanitized_prompt_data["clean_text"]
+    with timed_stage("query.guardrails.input", request_id=request_id):
+        sanitized_query_data = sanitize_input(user_query)
+        clean_user_query = sanitized_query_data["clean_text"]
+        sanitized_prompt_data = sanitize_input(prompt)
+        clean_prompt = sanitized_prompt_data["clean_text"]
 
-    embedding = await asyncio.to_thread(lambda: _get_embeddings().embed_query(clean_user_query))
+    async with async_timed_stage("query.embedding", request_id=request_id):
+        embedding = await asyncio.to_thread(
+            lambda: _get_embeddings().embed_query(clean_user_query)
+        )
 
-    search_result = await asyncio.to_thread(
-        qdrant.query_points,
-        collection_name=f"user_{user_id}",
-        prefetch=[],
-        query=embedding,
-        limit=top_k
-    )
+    async with async_timed_stage(
+        "query.vector_search",
+        request_id=request_id,
+        top_k=top_k,
+    ):
+        search_result = await asyncio.to_thread(
+            qdrant.query_points,
+            collection_name=f"user_{user_id}",
+            prefetch=[],
+            query=embedding,
+            limit=top_k
+        )
 
     results = search_result.points
 
     if not results:
-        raw_output, token_usage = await _invoke_llm_with_router(clean_user_query, clean_prompt, db=db)
+        raw_output, token_usage = await _invoke_llm_with_router(
+            clean_user_query,
+            clean_prompt,
+            db=db,
+            request_id=request_id,
+        )
         
         # Guardrails: Output validation
-        validated_output = validate_llm_output(raw_output)
+        with timed_stage("query.guardrails.output", request_id=request_id):
+            validated_output = validate_llm_output(raw_output)
         
         return {
             "answer": validated_output,
             "token_usage": token_usage
         }
 
-    context = "\n\n".join(
-        r.payload["text"]
-        for r in results
-        if r.payload and "text" in r.payload
-    )
+    with timed_stage(
+        "query.context.build",
+        request_id=request_id,
+        result_count=len(results),
+    ):
+        context = "\n\n".join(
+            r.payload["text"]
+            for r in results
+            if r.payload and "text" in r.payload
+        )
 
     final_prompt = clean_prompt.replace("{{context}}", context)
 
-    raw_output, token_usage = await _invoke_llm_with_router(clean_user_query, final_prompt, db=db)
+    raw_output, token_usage = await _invoke_llm_with_router(
+        clean_user_query,
+        final_prompt,
+        db=db,
+        request_id=request_id,
+    )
     
     # Guardrails: Output validation
-    validated_output = validate_llm_output(raw_output)
+    with timed_stage("query.guardrails.output", request_id=request_id):
+        validated_output = validate_llm_output(raw_output)
     
     return {
         "answer": validated_output,
