@@ -1,3 +1,5 @@
+# Modify the ingestion pipeline so that every uploaded chunk is automatically indexed into a local Elasticsearch instance (running via Docker Compose) using tenant and document metadata, while keeping PostgreSQL as the metadata store and Qdrant as the dense vector store for Hybrid RAG.
+
 import os
 from pathlib import Path
 from uuid import uuid4
@@ -12,6 +14,7 @@ from doc_ingestion.services.documents_table import (
     mark_document_ingested,
     mark_document_processing,
 )
+from query.rag.bm25 import bulk_index_chunks, delete_document_chunks
 
 
 CHUNK_SIZE = 1000
@@ -134,6 +137,7 @@ def ingest_pdf(user_id: int, file_path: str, source: str | None = None):
 
         points = []
         chunk_data_list = []
+        sparse_chunks = []
         for index, chunk in enumerate(chunks):
             vector_id = str(uuid4())
             vector = _get_embeddings().embed_query(chunk.page_content)
@@ -160,12 +164,23 @@ def ingest_pdf(user_id: int, file_path: str, source: str | None = None):
                     "content": chunk.page_content,
                 }
             )
+            sparse_chunks.append(
+                {
+                    "user_id": user_id,
+                    "document_id": document_id,
+                    "vector_id": vector_id,
+                    "chunk_index": index,
+                    "source": file_name,
+                    "text": chunk.page_content,
+                }
+            )
 
         if not points:
             raise RuntimeError("No text chunks could be extracted from the document")
 
         bulk_insert_chunks(chunk_data_list)
-        print('chunks inserted')
+        bulk_index_chunks(sparse_chunks)
+        print("chunks inserted")
         qdrant.upsert(collection_name=f"user_{user_id}", points=points)
         mark_document_ingested(document_id)
 
@@ -187,6 +202,7 @@ def ingest_pdf(user_id: int, file_path: str, source: str | None = None):
                 )
             except Exception as rollback_error:
                 print(f"Failed to roll back Qdrant vectors: {rollback_error}")
+        delete_document_chunks(user_id=user_id, document_id=document_id)
 
         mark_document_failed(document_id)
         raise

@@ -81,6 +81,18 @@ class ModelRouter:
             return ChatGoogleGenerativeAI(
                 model=cfg["model_name"], google_api_key=settings.GEMINI_API_KEY
             )
+        elif cfg["provider"] == "openrouter":
+            from langchain_openai import ChatOpenAI
+
+            if not settings.OPENROUTER_API_KEY:
+                raise RuntimeError(
+                    f"OPENROUTER_API_KEY must be set to use model '{model_key}'"
+                )
+            return ChatOpenAI(
+                model=cfg["model_name"],
+                api_key=settings.OPENROUTER_API_KEY,
+                base_url="https://openrouter.ai/api/v1",
+            )
         raise ValueError(f"Unknown provider: {cfg['provider']}")
 
     def get_client(self, model_key: str):

@@ -18,8 +18,8 @@ models:
     tier: cheap
 
   fallback:
-    provider: gemini
-    model_name: gemini-2.0-flash
+    provider: openrouter
+    model_name: google/gemma-4-31b-it:free
     max_tokens: 8192
     cost_per_1k_input: 0.00010
     cost_per_1k_output: 0.00040

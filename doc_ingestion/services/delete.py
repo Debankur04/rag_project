@@ -4,6 +4,7 @@ from doc_ingestion.services.documents_chunks import (
     get_chunks_for_document,
 )
 from doc_ingestion.services.documents_table import mark_document_deleted
+from query.rag.bm25 import delete_document_chunks, delete_user_chunks
 
 
 DOC_TABLE = "docs"
@@ -37,6 +38,7 @@ def delete_document(user_id: int, doc_id: str):
         )
 
     deleted_chunks = delete_chunks_for_document(doc_id_int)
+    delete_document_chunks(user_id=user_id, document_id=doc_id_int)
     mark_document_deleted(doc_id_int)
 
     return {
@@ -51,6 +53,7 @@ def delete_user_documents(user_id: int):
         qdrant.delete_collection(f"user_{user_id}")
     except Exception:
         pass
+    delete_user_chunks(user_id)
 
     docs = (
         supabase.table(DOC_TABLE)

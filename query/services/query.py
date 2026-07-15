@@ -1,12 +1,18 @@
+# Change the query pipeline to accomodate for the hybrid model. take the query and give both query and id to both bm25.py and dense.py take both the results and send the return to the rrf.py which result to reranker.py and then use the final return which will be the context back to the existing rag pipeline as context.
+
 import asyncio
 import time
 
-from config.db import qdrant
+from config.settings import settings
 from config.timing import async_timed_stage, timed_stage
 
 from query.llmops.config_loader import load_config
 from query.llmops.model_router import ModelRouter
 from query.llmops.guardrails import sanitize_input, validate_llm_output
+from query.rag.bm25 import bm25_search
+from query.rag.dense import dense_search
+from query.rag.reranker import rerank_chunks
+from query.rag.rrf import reciprocal_rank_fusion
 
 EMBED_MODEL_NAME = "all-MiniLM-L6-v2"
 
@@ -93,20 +99,55 @@ async def run_query(
             lambda: _get_embeddings().embed_query(clean_user_query)
         )
 
+    retrieval_top_k = max(top_k, settings.HYBRID_RETRIEVAL_TOP_K)
     async with async_timed_stage(
-        "query.vector_search",
+        "query.bm25_search",
         request_id=request_id,
-        top_k=top_k,
+        top_k=retrieval_top_k,
     ):
-        search_result = await asyncio.to_thread(
-            qdrant.query_points,
-            collection_name=f"user_{user_id}",
-            prefetch=[],
-            query=embedding,
-            limit=top_k
+        sparse_results = await asyncio.to_thread(
+            bm25_search,
+            user_id,
+            clean_user_query,
+            retrieval_top_k,
         )
 
-    results = search_result.points
+    async with async_timed_stage(
+        "query.dense_search",
+        request_id=request_id,
+        top_k=retrieval_top_k,
+    ):
+        dense_results = await asyncio.to_thread(
+            dense_search,
+            user_id,
+            embedding,
+            retrieval_top_k,
+        )
+
+    with timed_stage(
+        "query.rrf.fuse",
+        request_id=request_id,
+        bm25_count=len(sparse_results),
+        dense_count=len(dense_results),
+    ):
+        fused_results = reciprocal_rank_fusion(
+            [sparse_results, dense_results],
+            k=60,
+            limit=retrieval_top_k,
+        )
+
+    async with async_timed_stage(
+        "query.rerank",
+        request_id=request_id,
+        candidate_count=len(fused_results),
+        top_k=settings.HYBRID_RERANK_TOP_K,
+    ):
+        results = await asyncio.to_thread(
+            rerank_chunks,
+            clean_user_query,
+            fused_results,
+            settings.HYBRID_RERANK_TOP_K,
+        )
 
     if not results:
         raw_output, token_usage = await _invoke_llm_with_router(
@@ -131,9 +172,9 @@ async def run_query(
         result_count=len(results),
     ):
         context = "\n\n".join(
-            r.payload["text"]
-            for r in results
-            if r.payload and "text" in r.payload
+            result["text"]
+            for result in results
+            if result.get("text")
         )
 
     final_prompt = clean_prompt.replace("{{context}}", context)

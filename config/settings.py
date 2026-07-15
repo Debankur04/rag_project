@@ -17,6 +17,12 @@ class Settings(BaseSettings):
     QDRANT_URL: str | None = None
     QDRANT_API_KEY: str | None = None
 
+    ELASTICSEARCH_URL: str = "http://localhost:9200"
+    ELASTICSEARCH_INDEX: str = "rag_chunks"
+    BM25_CANDIDATE_LIMIT: int = 1000
+    HYBRID_RETRIEVAL_TOP_K: int = 20
+    HYBRID_RERANK_TOP_K: int = 10
+
     REDIS_URL: str = "redis://localhost:6379/0"
     CACHE_TTL_SECONDS: int = 600
     RATE_LIMIT_REQUESTS: int = 10
@@ -24,6 +30,8 @@ class Settings(BaseSettings):
 
     GROQ_API_KEY: str | None = None
     GEMINI_API_KEY: str | None = None
+    COHERE_API_KEY: str | None = None
+    OPENROUTER_API_KEY: str | None = None
 
     @property
     def FINAL_SUPABASE_KEY(self) -> str:

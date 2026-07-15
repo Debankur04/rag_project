@@ -1,0 +1,9 @@
+.git
+.venv
+__pycache__/
+*.pyc
+.env
+.codex/
+.agents/
+documentation/
+temp_page_*.png
