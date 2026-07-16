@@ -1,437 +1,318 @@
-# How It Works
+# System Internals
 
-This document explains the inner workings of the RAG Backend API. It walks through the ingestion pipeline, the query pipeline, and all supporting subsystems — from document chunking to model routing to caching.
+A technical walkthrough of the Hybrid RAG Backend — covering the document ingestion pipeline, the hybrid query pipeline, and all supporting subsystems. This document is intended for engineers who want to understand how the system works at the implementation level.
 
 ---
 
-## Table of Contents
+## Contents
 
 1. [System Overview](#1-system-overview)
 2. [Document Ingestion Pipeline](#2-document-ingestion-pipeline)
-   - [Flow](#flow)
-   - [PDF Text Extraction](#pdf-text-extraction)
-   - [Chunking Strategy](#chunking-strategy)
+   - [Text Extraction](#text-extraction)
+   - [Chunking](#chunking)
    - [Embedding](#embedding)
-   - [Vector Storage](#vector-storage)
-   - [Metadata Persistence](#metadata-persistence)
-   - [Duplicate Detection](#duplicate-detection)
-3. [Query Pipeline](#3-query-pipeline)
-   - [Flow](#flow-1)
-   - [Semantic Caching](#semantic-caching)
-   - [Guardrails — Input Sanitization](#guardrails--input-sanitization)
-   - [Embedding](#embedding-1)
-   - [Vector Search](#vector-search)
-   - [Intent Classification](#intent-classification)
-   - [Model Routing](#model-routing)
-   - [Prompt Engineering](#prompt-engineering)
-   - [LLM Invocation](#llm-invocation)
-   - [Guardrails — Output Validation](#guardrails--output-validation)
-   - [Caching and Logging](#caching-and-logging)
+   - [Dual Indexing](#dual-indexing)
+   - [Rollback on Failure](#rollback-on-failure)
+3. [Hybrid Query Pipeline](#3-hybrid-query-pipeline)
+   - [Semantic Cache](#31-semantic-cache)
+   - [Input Guardrails](#32-input-guardrails)
+   - [Embedding](#33-embedding)
+   - [BM25 Sparse Retrieval](#34-bm25-sparse-retrieval)
+   - [Dense Vector Retrieval](#35-dense-vector-retrieval)
+   - [Reciprocal Rank Fusion](#36-reciprocal-rank-fusion)
+   - [Cohere Cross-Encoder Reranking](#37-cohere-cross-encoder-reranking)
+   - [Prompt Construction](#38-prompt-construction)
+   - [LLM Routing and Invocation](#39-llm-routing-and-invocation)
+   - [Output Validation](#310-output-validation)
+   - [Conversation Persistence](#311-conversation-persistence)
 4. [Authentication](#4-authentication)
-5. [Middleware](#5-middleware)
-   - [Rate Limiting](#rate-limiting)
-   - [API Key Middleware](#api-key-middleware)
-6. [Database Architecture](#6-database-architecture)
-   - [PostgreSQL](#postgresql)
-   - [Qdrant](#qdrant)
-   - [Redis](#redis)
-   - [MongoDB](#mongodb)
+5. [Middleware Stack](#5-middleware-stack)
+6. [Data Layer](#6-data-layer)
 7. [Configuration](#7-configuration)
-8. [Observability](#8-observability)
 
 ---
 
 ## 1. System Overview
 
-The RAG Backend is a **multi-tenant Retrieval-Augmented Generation (RAG)** service. It allows each tenant to:
+The Hybrid RAG Backend is a **multi-user document intelligence service**. Each user can upload PDF documents and query them in natural language. The system responds with answers that are grounded exclusively in the user's uploaded content.
 
-- **Ingest PDF documents** that are chunked, embedded, and stored in a per-tenant vector collection.
-- **Query those documents** using natural language. Relevant chunks are retrieved and sent to an LLM to generate grounded answers.
+The architecture has three primary modules:
 
-The system enforces strict **grounding rules**: the LLM is only permitted to answer from the retrieved context. If the answer is not present, it returns `"I don't have that information."` This prevents hallucination and ensures that responses are traceable to ingested source material.
+- **`auth`** — authentication flows backed by Supabase Auth
+- **`doc_ingestion`** — PDF processing pipeline that populates both a dense vector index and a sparse keyword index
+- **`query`** — hybrid retrieval pipeline that combines BM25 and dense search, fuses results with RRF, reranks with Cohere, and calls a cost-routed LLM
 
-Key design pillars:
+**Core design guarantees:**
 
-- **Multi-tenancy**: All data is scoped by `tenant_id`. Tenants are fully isolated.
-- **Safety**: Guardrails detect prompt injection, PII, and unsafe output before/after the LLM.
-- **Cost awareness**: An intent classifier routes simple queries to cheap models and reserves expensive models for complex requests.
-- **Observability**: All ingestion and query events are logged to MongoDB with full token usage and status.
+| Guarantee | Implementation |
+|-----------|---------------|
+| Grounded answers | System prompt explicitly prohibits prior knowledge; LLM must cite retrieved context |
+| User isolation | Per-user Qdrant collections; `user_id` filter on every Elasticsearch query; ownership checks before all mutations |
+| Graceful degradation | Elasticsearch failures fall back to dense-only; Cohere failures fall back to top-N RRF results |
+| No cross-user cache hits | Cache keys are scoped to `sha256(user_id:query_text)` |
 
 ---
 
 ## 2. Document Ingestion Pipeline
 
-### Flow
+The full flow from file upload to a searchable, indexed document:
 
 ```
-Client uploads PDF
-       ↓
-POST /add_doc (tenant_id, file)
-       ↓
-1. Compute SHA-256 hash of file content
-2. Check if document already ingested (de-duplication)
-       ↓ (if duplicate)
-       Return existing document record
-       ↓ (if new)
-3. Create Document record with status="pending"
-4. Update status to "processing"
-       ↓
-5. Extract text (PyPDF → fallback to OCR if no text layers)
-6. Chunk text (RecursiveCharacterTextSplitter)
-7. Generate embeddings for each chunk (all-MiniLM-L6-v2)
-       ↓
-8. Create or ensure Qdrant collection exists: tenant_<id>
-9. Upsert vector points to Qdrant
-10. Bulk insert Chunk records into PostgreSQL
-       ↓
-11. Update Document status to "ingested"
-12. Log ingestion event to MongoDB
-       ↓
-Return document metadata and chunk count
+POST /add_doc (or /add_docs)
+        │
+        ▼
+┌─────────────────────────────────────────────────────────┐
+│  1. Validate file (.pdf extension check)                 │
+│  2. Write to temp path                                   │
+│  3. Compute SHA-256 content hash                         │
+│  4. Query Supabase docs table for existing hash          │
+│        ├─ Match found + chunks exist → return duplicate  │
+│        └─ No match → create doc record (status=pending)  │
+│  5. Update status to "processing"                        │
+│  6. Extract text                                         │
+│        ├─ PyPDF (text-native PDFs)                       │
+│        └─ Tesseract OCR fallback (image-based PDFs)      │
+│  7. Chunk with RecursiveCharacterTextSplitter            │
+│     (chunk_size=1000, overlap=200)                       │
+│  8. Embed each chunk (all-MiniLM-L6-v2 via fastembed)   │
+│  9. Dual-write:                                          │
+│        ├─ Upsert to Qdrant → collection user_<id>        │
+│        ├─ Bulk index to Elasticsearch → rag_chunks       │
+│        └─ Insert rows to Supabase → chunks table         │
+│ 10. Update doc status to "ingested"                      │
+└─────────────────────────────────────────────────────────┘
+        │
+        ▼
+   Return { id, chunk_count, duplicate, status }
 ```
 
-### PDF Text Extraction
+### Text Extraction
 
-**Primary method:** `PyPDFLoader` from LangChain Community.
+**Primary path — `PyPDFLoader`:**
+For text-native PDFs, LangChain's `PyPDFLoader` extracts text directly from the PDF structure. This is fast and accurate for the majority of documents.
 
-If `PyPDFLoader` returns empty pages (i.e., the PDF is an image-based scan), the system falls back to **OCR**:
+**Fallback path — Tesseract OCR:**
+If every extracted page is empty (indicating an image-based or scanned document), the system falls back to:
 
-1. Convert PDF pages to images using `pdf2image.convert_from_path()`.
-2. Preprocess each page with OpenCV (grayscale, thresholding) to improve OCR accuracy.
-3. Extract text using `pytesseract.image_to_string()`.
+1. **`pdf2image.convert_from_path()`** — renders each PDF page as a PNG.
+2. **OpenCV preprocessing** — converts to grayscale and applies binary thresholding to improve contrast and reduce noise before OCR.
+3. **`pytesseract.image_to_string()`** — extracts text from the preprocessed image.
 
-This two-tier approach handles both text-native PDFs and scanned documents.
+Temporary image files are created with a UUID prefix to prevent collisions and are removed immediately after processing each page.
 
-### Chunking Strategy
+### Chunking
 
-**Splitter:** `RecursiveCharacterTextSplitter` from LangChain.
+**Splitter:** `RecursiveCharacterTextSplitter` from LangChain  
+**Chunk size:** 1,000 characters  
+**Overlap:** 200 characters
 
-**Parameters:**
-
-- `chunk_size = 1000` characters
-- `chunk_overlap = 200` characters
-
-**Why recursive?** The splitter tries to break text at natural boundaries (paragraphs, sentences) before falling back to character-level splits. This preserves semantic coherence within chunks.
-
-**Chunk metadata:**
-
-- `document_id`
-- `source` (file name)
-- `chunk_index` (0-based position in the document)
-- `text` (the chunk content itself)
+The recursive splitter attempts to break text at natural semantic boundaries in this priority order: `\n\n` → `\n` → `.` → ` ` → character-level. This produces chunks that are more likely to contain complete, coherent thoughts — critical for retrieval quality. The 200-character overlap ensures that sentences straddling a chunk boundary appear in both adjacent chunks, preventing boundary-edge retrieval misses.
 
 ### Embedding
 
-All chunks are embedded using **`all-MiniLM-L6-v2`** from HuggingFace.
+Each chunk is embedded using **`sentence-transformers/all-MiniLM-L6-v2`** via the **fastembed** library, producing a 384-dimensional float vector. fastembed is a lightweight, pure-Python library that avoids PyTorch and CUDA dependencies, simplifying the Dockerfile significantly.
 
-- **Dimensionality:** 384
-- **Distance metric:** Cosine similarity
-- **Model type:** Sentence-Transformers (optimized for semantic similarity)
+The embedding function is centralised in `config/embeddings.py` and used identically during ingestion and query time. This is a deliberate constraint — any change to the embedding model must be reflected in both contexts simultaneously, because mixing models in the same Qdrant collection produces meaningless similarity scores.
 
-This model is lightweight, fast, and produces high-quality embeddings suitable for retrieval tasks.
+### Dual Indexing
 
-### Vector Storage
+Each chunk is written to three locations in sequence within the same ingestion call:
 
-Vectors are stored in **Qdrant**, a production-grade vector database optimized for high-speed nearest-neighbor search.
+| Destination | What is written | Access pattern |
+|-------------|----------------|----------------|
+| **Qdrant** `user_<id>` | 384-dim vector + payload `{document_id, source, chunk_index, text, user_id}` | Nearest-neighbour semantic search at query time |
+| **Elasticsearch** `rag_chunks` | Fields `{user_id, document_id, vector_id, chunk_index, source, text}` | BM25 keyword search, filtered by `user_id` |
+| **Supabase** `chunks` | `{document_id, vector_id, chunk_index, content}` | Chunk–document mapping; vector ID lookup for deletion |
 
-**Collection naming:** Each tenant gets a dedicated collection: `tenant_<tenant_id>`.
+The Elasticsearch document ID follows the scheme `user_id:document_id:chunk_index`, making writes idempotent — re-ingesting the same document (after duplicate detection resolves the hash mismatch) overwrites existing entries rather than creating duplicates.
 
-**Point structure:**
+### Rollback on Failure
 
-```python
+If an exception is raised after vectors have been written, the pipeline executes a coordinated rollback:
+
+1. Qdrant vectors are deleted by the collected list of `vector_id`s.
+2. Elasticsearch chunks are removed via `delete_by_query` on `user_id` + `document_id`.
+3. The document record's `status` is set to `"failed"` in Supabase.
+
+This ensures no partial state is left in any store, and the ingestion can be safely retried.
+
+---
+
+## 3. Hybrid Query Pipeline
+
+The full flow from query text to a grounded answer:
+
+```
+POST /query { text, conversation_id? }
+        │
+        ▼
+┌───────────────────────────────────────────────────────────┐
+│ 1. Get or create conversation; insert user message        │
+│ 2. Check Redis cache (key = sha256(user_id:query_text))   │
+│        ├─ Cache hit → insert assistant message, return    │
+│        └─ Cache miss → continue                           │
+│ 3. Sanitize input (injection detection + PII masking)     │
+│ 4. Embed query (all-MiniLM-L6-v2)                         │
+│ 5. BM25 search → top 20 candidates (Elasticsearch)        │
+│ 6. Dense search → top 20 candidates (Qdrant) [concurrent] │
+│ 7. RRF fusion → single ranked list, up to 20 candidates   │
+│ 8. Cohere rerank → top 10 final candidates                │
+│ 9. Build grounded prompt with reranked context            │
+│10. Intent classify → select LLM tier                      │
+│11. Invoke LLM (async, with latency tracking)              │
+│12. Validate output (length, repetition, hallucination)    │
+│13. Cache result; insert assistant message                 │
+└───────────────────────────────────────────────────────────┘
+        │
+        ▼
+   Return { query_id, conversation_id, answer, token_usage }
+```
+
+### 3.1 Semantic Cache
+
+Every query first checks Redis for a cached response.
+
+- **Cache key:** `sha256(f"{user_id}:{query_text}")` — scoped by user to prevent cross-contamination between users' distinct document sets
+- **Storage:** Redis string, JSON-serialised
+- **TTL:** `CACHE_TTL_SECONDS` (default: 600 seconds)
+
+A cache hit bypasses embedding, retrieval, reranking, and the LLM call entirely. The cached answer is inserted into the conversation history and returned. This significantly reduces latency and API costs for repeated queries.
+
+### 3.2 Input Guardrails
+
+All query text passes through a multi-layer sanitisation function before any external service is called.
+
+**Text normalisation** produces a clean version of the input:
+- Lowercased
+- Whitespace collapsed to single spaces
+- Leading and trailing whitespace stripped
+
+This normalised text is used as the embedding input, ensuring consistent vector representations for semantically identical queries with different formatting.
+
+**Prompt injection detection** scans the input for patterns that attempt to override the system prompt:
+
+| Pattern | Severity | Risk Score |
+|---------|----------|-----------|
+| `ignore (previous/all) instructions` | High | +3 |
+| `jailbreak` | High | +3 |
+| `DAN mode` | High | +3 |
+| `forget your (system/instructions)` | High | +3 |
+| `<script>`, `<iframe>`, `<object>` | High | +2 |
+| `you are now` | Medium | +1 |
+| `pretend (you are/to be)` | Medium | +1 |
+| Repeated `you are` / `act as` / `system prompt` (>2 occurrences) | — | +2 |
+
+The cumulative `risk_score` is logged. A configurable block threshold is planned for a future release.
+
+**PII masking** identifies sensitive data before it reaches the LLM API or the cache:
+
+| PII Type | Detection Pattern | Action |
+|----------|------------------|--------|
+| Credit card | 13–16 digit sequences | Redacted → `[REDACTED_CREDIT_CARD]` |
+| SSN | `\d{3}-\d{2}-\d{4}` | Redacted → `[REDACTED_SSN]` |
+| Passport | `[A-Z]{1,2}\d{6,9}` | Detected and logged |
+| Email address | Standard RFC 5322 regex | Detected and logged |
+| Phone number | 10-digit sequences | Detected and logged |
+
+High-risk PII (financial identifiers, government IDs) is redacted from the text before any external call. Lower-risk types are logged but preserved, as they may represent legitimate search context.
+
+### 3.3 Embedding
+
+The sanitised query text is embedded using the same `all-MiniLM-L6-v2` model that was used during ingestion. The embedding call is dispatched via `asyncio.to_thread()` to avoid blocking the event loop while the CPU-bound embedding model runs.
+
+Using the identical model for both ingestion and retrieval is mandatory for correctness — the query vector must occupy the same semantic space as the document chunk vectors.
+
+### 3.4 BM25 Sparse Retrieval
+
+The query is issued to Elasticsearch as a BM25 `match` query, strictly filtered by `user_id`:
+
+```json
 {
-  "id": "uuid-string",
-  "vector": [0.123, -0.456, ...],  # 384-dim embedding
-  "payload": {
-    "document_id": int,
-    "source": "filename.pdf",
-    "chunk_index": int,
-    "text": "chunk content"
+  "query": {
+    "bool": {
+      "filter": [{ "term": { "user_id": "<user-uuid>" } }],
+      "must": [{
+        "match": {
+          "text": { "query": "<normalised query>", "operator": "or" }
+        }
+      }]
+    }
   }
 }
 ```
 
-**Collection initialization:**
+BM25 scores documents based on term frequency and inverse document frequency, rewarding exact token overlap. It excels at surfacing documents that contain specific product codes, clause identifiers, proper nouns, or technical terms that share no semantic proximity with conceptually similar phrases.
 
-If the collection doesn't exist, it's created on-the-fly with:
+**Returns:** Up to `HYBRID_RETRIEVAL_TOP_K` (default: 20) results, each annotated with `rank`, `bm25_score`, and `retriever: "bm25"`.
 
-```python
-VectorParams(size=384, distance=Distance.COSINE)
-```
+**Failure mode:** If Elasticsearch is unreachable, the function catches the exception, logs it, and returns an empty list. The pipeline continues with dense-only results.
 
-### Metadata Persistence
+### 3.5 Dense Vector Retrieval
 
-**PostgreSQL tables:**
-
-1. **`doc`** (Document)
-   - `id` (BigInt, primary key)
-   - `tenant_id` (BigInt, indexed)
-   - `filename` (String)
-   - `url` (String, source reference)
-   - `content_hash` (SHA-256, indexed for duplicate detection)
-   - `status` (String: `pending`, `processing`, `ingested`, `failed`, `deleted`)
-   - `created_at`, `updated_at` (timestamps)
-
-2. **`chunks`** (Chunk)
-   - `id` (UUID, primary key)
-   - `document_id` (BigInt, foreign key to `doc.id`)
-   - `tenant_id` (BigInt, indexed)
-   - `vector_id` (String, references the Qdrant point ID)
-   - `chunk_index` (Integer)
-   - `created_at` (timestamp)
-
-These tables enable:
-
-- Efficient lookups by tenant
-- Document status tracking (e.g., retry failed ingestions)
-- Mapping between SQL records and Qdrant vectors for deletions
-
-### Duplicate Detection
-
-Before ingesting a new document, the system computes a **SHA-256 hash** of the file content.
-
-It then queries:
-
-```sql
-SELECT * FROM doc
-WHERE tenant_id = :tenant_id
-  AND content_hash = :hash
-  AND status = 'ingested'
-```
-
-If a match is found **and** the document has associated chunks in the `chunks` table, the system skips ingestion and returns the existing record with `duplicate: true`.
-
-This prevents redundant processing and storage costs.
-
-### Error Handling and Rollback
-
-If any step fails after vector insertion:
-
-1. The system attempts to delete all inserted Qdrant points using `points_selector=PointIdsList(points=inserted_vector_ids)`.
-2. The `Document` status is set to `"failed"`.
-3. A descriptive error is returned to the caller.
-
-This ensures that partial ingestions do not pollute the vector store.
-
----
-
-## 3. Query Pipeline
-
-### Flow
-
-```
-Client sends natural language query
-       ↓
-POST /query (text, tenant_id)
-       ↓
-1. Generate cache key (SHA-256 of query text)
-2. Check Redis cache
-       ↓ (if cached)
-       Return cached answer immediately
-       ↓ (if not cached)
-3. Sanitize input (guardrails)
-       - Detect prompt injection patterns
-       - Mask high-risk PII (SSN, credit card)
-       - Calculate risk score
-       ↓
-4. Embed query text (all-MiniLM-L6-v2)
-       ↓
-5. Search tenant's Qdrant collection (top-5 chunks)
-       ↓
-6. Classify intent (simple vs. complex)
-       ↓
-7. Route to appropriate model (cheap for simple, expensive for complex)
-       ↓
-8. Build grounded prompt with retrieved context
-       ↓
-9. Invoke LLM (async, with latency tracking)
-       ↓
-10. Validate output (length, repetition, hallucination signals)
-       ↓
-11. Cache result and log to MongoDB
-       ↓
-Return answer and token usage
-```
-
-### Semantic Caching
-
-**Cache key:** SHA-256 hash of the normalized query text.  
-**Storage:** Redis  
-**TTL:** Configurable via `CACHE_TTL_SECONDS` (default: 600 seconds = 10 minutes)
-
-When a query arrives:
-
-```python
-key = f"query_cache:{sha256(text)}"
-cached = redis.get(key)
-if cached:
-    return json.loads(cached)
-```
-
-Cache hits skip embedding, vector search, and LLM invocation entirely. This dramatically reduces latency and cost for repeated queries.
-
-**Cache invalidation:**
-
-There is currently no automatic invalidation on document updates. The cache relies on TTL expiration. Future work could add event-driven invalidation when a tenant's documents are modified.
-
-### Guardrails — Input Sanitization
-
-All incoming queries pass through a **sanitization layer** before processing:
-
-#### Threat Detection
-
-**Prompt injection patterns:**
-
-```regex
-- r"ignore (previous|all) instructions" (high severity)
-- r"you are now" (medium)
-- r"pretend (you are|to be)" (medium)
-- r"jailbreak" (high)
-- r"DAN mode" (high)
-- r"forget your (system|instructions)" (high)
-```
-
-**HTML/script injection:**
-
-```regex
-- r"<\s*(script|iframe|object)[^>]*>"
-```
-
-Each match increments a risk score. High-severity patterns contribute +3, medium +1.
-
-**Embedded prompt-like instructions:**
-
-If more than 2 occurrences of patterns like `"you are"`, `"act as"`, or `"system prompt"` are detected, the input is flagged as likely prompt injection.
-
-#### PII Masking
-
-**Detected patterns:**
-
-- `credit_card`: `\b(?:\d[ -]*?){13,16}\b`
-- `ssn`: `\b\d{3}-\d{2}-\d{4}\b`
-- `passport`: `\b[A-Z]{1,2}\d{6,9}\b`
-- `email`: `\b[\w\.-]+@[\w\.-]+\.\w+\b`
-- `phone`: `\b\d{10}\b`
-
-**Masking strategy:**
-
-- **High-risk** (credit cards, SSNs): Replaced with `[REDACTED_CREDIT_CARD]` or `[REDACTED_SSN]`.
-- **Low-risk** (emails, phones): Detected and logged in metadata but **not masked** (as they may be necessary for context).
-
-#### Text Normalization
-
-All text is:
-
-- Converted to lowercase.
-- Collapsed to single spaces (`\s+` → ` `).
-- Stripped of leading/trailing whitespace.
-
-This produces a "clean" text suitable for embedding and a "normalized" text for consistent cache key generation.
-
-### Embedding
-
-The sanitized query text is embedded using the same model as documents: **`all-MiniLM-L6-v2`**.
-
-This ensures query embeddings live in the same vector space as document chunks, enabling accurate retrieval.
-
-### Vector Search
-
-The query embedding is sent to Qdrant:
+The query embedding is used to perform approximate nearest-neighbour search against the user's Qdrant collection:
 
 ```python
 qdrant.query_points(
-    collection_name=f"tenant_{tenant_id}",
-    query=embedding,
-    limit=5
+    collection_name=f"user_{user_id}",
+    query=embedding_vector,     # 384-dimensional float list
+    limit=HYBRID_RETRIEVAL_TOP_K
 )
 ```
 
-**Returns:** The top-5 most similar chunks (by cosine similarity).
+Dense search captures semantic similarity — paraphrases, synonyms, and conceptually related passages that share no lexical overlap with the query. It is the complement to BM25's exact matching.
 
-Each result includes:
+**Returns:** Up to 20 results ranked by cosine similarity, annotated with `retriever: "dense"`.
 
-- `payload["text"]`: The chunk content.
-- `payload["source"]`: Original document name.
-- `payload["chunk_index"]`: Position in the document.
+**Failure mode:** If the user has no documents, the Qdrant collection does not exist and the function returns an empty list gracefully.
 
-**If no results are returned** (e.g., the tenant has no documents), the query is sent directly to the LLM without context. The LLM responds using its pretrained knowledge, but the system prompt still instructs it to avoid hallucination.
+Both BM25 and dense retrieval run concurrently via `asyncio.to_thread`, so total retrieval latency is bounded by the slower of the two rather than their sum.
 
-### Intent Classification
+### 3.6 Reciprocal Rank Fusion
 
-The system uses a **fast LLM-based intent classifier** to determine query complexity.
+RRF merges the two independently ranked lists into a single unified ranking without requiring score normalisation.
 
-**Model:** `llama-3.1-8b-instant` (via Groq)
-
-**Prompt:**
+**Algorithm:**
 
 ```
-You are an intent classifier. Return strictly 'True' if the user query
-is a simple factual question or greeting (e.g., asking for weather, definitions).
-Return strictly 'False' if it is a complex query requiring multi-step planning,
-reasoning, or external data processing (e.g., travel planning, complex searches).
-Output nothing else but True or False.
+rrf_score(chunk) = Σ  1 / (k + rank_i)
+                  i ∈ {bm25, dense}
 ```
 
-**Classification result:**
+where `k = 60` is a smoothing constant that reduces the outsized influence of top-ranked results.
 
-- `True` → route to **fast model** (cheap, low-latency)
-- `False` → route to **primary model** (expensive, high-quality)
+**Deduplication:** A chunk that appears in both lists is identified by its `vector_id` (or `document_id:chunk_index` as a fallback). Its RRF scores from each list are summed. A chunk retrieved by both systems — demonstrating cross-signal agreement — naturally receives a higher combined score than one found by only a single retriever.
 
-**Intent logging:**
+**Output:** A single list of up to `HYBRID_RETRIEVAL_TOP_K` chunks, each annotated with `rrf_score`, unified `rank`, and `retrievers: ["bm25", "dense"]` or the applicable subset.
 
-All classifications are stored in the PostgreSQL `intent` table for analysis and classifier tuning.
+The key advantage of RRF over weighted score interpolation is that BM25 and cosine similarity scores exist on incomparable scales. RRF uses only ordinal rank, making it mathematically principled and requiring no calibration.
 
-```sql
-CREATE TABLE intent (
-  id UUID PRIMARY KEY,
-  query TEXT,
-  intent TEXT  -- 'simple' or 'complex'
-);
-```
+### 3.7 Cohere Cross-Encoder Reranking
 
-### Model Routing
-
-The **ModelRouter** selects the best model based on:
-
-1. **Intent classification** (simple vs. complex).
-2. **Model health** (error rate, latency, circuit breaker state).
-
-**Routing rules (from `config.yaml`):**
-
-```yaml
-routing_rules:
-  use_intent_classifier: true
-  simple_query_model: fast
-  default_model: primary
-  fallback_chain: [primary, fast, fallback]
-  latency_threshold_ms: 3000
-  error_threshold_pct: 5
-```
-
-**Fallback chain:**
-
-1. **primary** — `llama-3.3-70b-versatile` (Groq)
-2. **fast** — `llama-3.1-8b-instant` (Groq)
-3. **fallback** — `gemini-2.0-flash` (Google)
-
-**Health tracking:**
-
-Each model maintains a `ModelHealth` object:
-
-- **`error_count`** / **`total_calls`** → error rate
-- **`latencies`** (rolling window of last 100 calls) → p99 latency
-- **`circuit_open`** — if error rate > 5% or p99 > 3000ms, the circuit opens for 60 seconds
-
-**Circuit breaker behavior:**
-
-When a circuit is open, the model is considered unhealthy and skipped in the fallback chain. After the cooldown period (60 seconds), the circuit enters a "half-open" state and allows one test call.
-
-### Prompt Engineering
-
-The system uses a **grounded prompt template** designed to minimize hallucination.
+The fused candidate list is sent to Cohere's cross-encoder reranker:
 
 ```python
-SYSTEM_RULES = """
+client.rerank(
+    model="rerank-v4.0-fast",
+    query=clean_query_text,
+    documents=[chunk["text"] for chunk in fused_candidates],
+    top_n=HYBRID_RERANK_TOP_K     # default: 10
+)
+```
+
+Both BM25 and dense retrieval are **bi-encoder** approaches: the query and each document are encoded independently, and similarity is estimated from their vector representations. This is fast but fundamentally limited — the model cannot attend to how the query and document text interact with each other.
+
+A **cross-encoder** reads the query and each candidate document together in a single forward pass, enabling full cross-attention. This produces dramatically more accurate relevance judgements, particularly for questions where the relevance is implicit or requires multi-step reasoning across a passage.
+
+The result is the top 10 most relevant chunks — the final context window that is passed to the LLM.
+
+**Failure mode:** If `COHERE_API_KEY` is not set, or if the API call fails, the function returns the top-N RRF-ranked candidates unchanged. The pipeline continues to function with hybrid-without-reranking quality.
+
+### 3.8 Prompt Construction
+
+The retrieved chunks are assembled into a grounded system prompt that strictly constrains LLM behaviour:
+
+```
+SYSTEM RULES:
 You are an information retrieval assistant.
 
 You MUST answer strictly and only using the information provided
@@ -443,398 +324,228 @@ Rules you must follow:
 - Do NOT add details not present in the context.
 - If the answer is not explicitly stated, respond exactly with:
   "I don't have that information."
-"""
-
-prompt = f"""
-SYSTEM RULES:
-{SYSTEM_RULES}
 
 GROUND TRUTH CONTEXT:
-{context}
+<chunk_1_text>
+
+<chunk_2_text>
+
+...
 
 USER QUERY:
-{query}
-"""
+<normalised_query>
 ```
 
-**Context assembly:**
+The context section is populated by joining the top-N reranked chunk texts with `\n\n`. If retrieval returns no results (the user has no documents, or no chunks meet the relevance threshold), the `{{context}}` placeholder is left empty — the grounding rules remain active and the LLM is forced to declare a lack of context.
 
-```python
-context = "\n\n".join(chunk.payload["text"] for chunk in top_5_results)
-```
+### 3.9 LLM Routing and Invocation
 
-If no chunks are retrieved, `{{context}}` is replaced with an empty string, and the LLM is instructed to refuse answering.
+**Intent classification:**
 
-### LLM Invocation
+Before model selection, the query is classified as simple or complex using `llama-3.1-8b-instant` via Groq. The classifier is instructed to return strictly `True` (simple query) or `False` (complex query). Simple queries are routed to the `fast` model tier; complex queries go to the `primary` model.
 
-The router invokes the selected model asynchronously:
+The classification result is persisted to the Supabase `intent` table, creating a dataset for accuracy analysis and routing threshold tuning over time.
 
-```python
-client = router.get_client(model_key)
-response = await client.ainvoke(prompt)
-```
+**Model registry:**
 
-**Token tracking:**
+| Alias | Model | Provider | Tier |
+|-------|-------|----------|------|
+| `primary` | `openai/gpt-oss-120b` | Groq | Expensive — used for complex queries |
+| `fast` | `llama-3.1-8b-instant` | Groq | Cheap — ~200ms, used for simple queries |
+| `fallback` | `google/gemma-4-31b-it:free` | OpenRouter | Cheap — cross-provider failover |
 
-Token usage is extracted from the response metadata:
+**Fallback chain:** `primary → fast → fallback`
 
-```python
-input_tokens = response.usage_metadata["input_tokens"]
-output_tokens = response.usage_metadata["output_tokens"]
-```
+**Circuit breaker:**
 
-These values are logged and could be used for billing or budget enforcement.
+Each model maintains a `ModelHealth` object tracking error count, total calls, and a rolling deque of the last 100 latency measurements. A model's circuit opens when:
 
-**Latency tracking:**
+- **Error rate exceeds 5%** across the rolling window, or
+- **p99 latency exceeds 3,000ms**
 
-Elapsed time is measured and recorded:
+When the circuit is open, the model is skipped in the fallback chain for a 60-second cooldown period, after which it enters a half-open state that allows a single test call. This pattern prevents a degraded provider from dragging down response times for all users while automatically recovering once conditions improve.
 
-```python
-start = time.time()
-response = await client.ainvoke(...)
-latency_ms = (time.time() - start) * 1000
-router.record_success(model_key, latency_ms)
-```
+**Invocation:**
 
-This feeds into the p99 latency calculation for circuit breaker decisions.
+The selected LangChain client's `ainvoke()` is called asynchronously. Elapsed time is measured and recorded via `record_success()` or `record_failure()` on the health tracker. Token usage is extracted from `usage_metadata` (Gemini-style) or `response_metadata.token_usage` (OpenAI-style), normalised to a consistent `{input_tokens, output_tokens, model}` shape.
 
-### Guardrails — Output Validation
+### 3.10 Output Validation
 
-After the LLM returns a response, the output is validated:
+Every LLM response passes through three validation checks before being returned:
 
-#### Length Check
+| Check | Condition | Result |
+|-------|-----------|--------|
+| **Minimum length** | Fewer than 15 words | `OutputValidationError` — likely truncation |
+| **Repetition ratio** | Fewer than 30% unique words | `OutputValidationError` — likely stuck-loop failure mode |
+| **Hallucination signals** | Patterns: `\$\d{4+}`, `"guaranteed price"`, `"confirmed booking"`, `"100% success"`, `"definitely"`, `"always"` | Warning logged; response not blocked |
 
-```python
-word_count = len(output.split())
-if word_count < 15:
-    raise OutputValidationError("Reply too short")
-```
+The first two checks raise exceptions that propagate to the route handler. The hallucination signal scan is currently advisory — it flags overconfident claims for monitoring while allowing the response through.
 
-This filters out truncated or incomplete responses.
+### 3.11 Conversation Persistence
 
-#### Repetition Check
+Every query/answer pair is appended to the conversation thread in Supabase:
 
-```python
-unique_words = len(set(output.split()))
-if unique_words < word_count * 0.3:
-    raise OutputValidationError("Too repetitive (possible LLM failure)")
-```
+1. A `conversations` record is fetched (if `conversation_id` was provided) or created (using the first 80 characters of the query as the title).
+2. The user's message is inserted into `messages` with `role = "user"`.
+3. After the LLM answer is validated, the assistant's reply is inserted with `role = "assistant"`.
+4. The conversation's `updated_at` timestamp is bumped to keep the list sort order current.
 
-If fewer than 30% of words are unique, the response is likely a failure mode (e.g., the model got stuck in a loop).
-
-#### Hallucination Signals
-
-The validator scans for overconfident or unrealistic claims:
-
-```regex
-- r"\$\d{4,}"           # Large dollar amounts
-- r"guaranteed price"
-- r"confirmed booking"
-- r"100% success"
-- r"no risk"
-- r"as of \d{4}"        # Specific year claims
-- "definitely", "always"
-```
-
-These patterns don't block the response but are logged as warnings for review.
-
-### Caching and Logging
-
-Once validation passes:
-
-1. **Cache the result** in Redis (keyed by query hash, TTL = 600s).
-2. **Log to MongoDB** via `log_query_async()`:
-
-```python
-{
-  "query_id": "uuid",
-  "query_text": "...",
-  "response": {
-    "answer": "...",
-    "token_usage": {...}
-  },
-  "intent": "simple" | "complex" | null,
-  "status": "success" | "cached" | "error",
-  "timestamp": datetime.utcnow()
-}
-```
-
-This creates an audit trail for every query.
+Cache hits follow the same path — the cached answer is persisted to the conversation so the history is always complete regardless of cache state.
 
 ---
 
 ## 4. Authentication
 
-Authentication is handled by **Supabase Auth**.
+**Provider:** Supabase Auth (JWT issuance and verification).
 
-**Flow:**
+**Enforcement:** `access_token_middleware` runs as an HTTP middleware on every incoming request. For non-public paths:
 
-1. Client calls `POST /auth/register` or `POST /auth/login`.
-2. The backend proxies the request to Supabase using the `supabase-py` client.
-3. Supabase returns a JWT (`access_token`) and a `refresh_token`.
-4. The client includes the JWT in the `Authorization: Bearer <token>` header for protected routes.
+1. Extracts the Bearer token from the `Authorization` header.
+2. Calls `supabase_auth.auth.get_user(token)` to verify the token against Supabase.
+3. Populates `request.state.app_user` with the user's UUID and email.
+4. Short-circuits with `HTTP 401` if the token is absent, malformed, or invalid.
 
-**Protected routes:**
+Route handlers never perform token verification themselves. They consume `request.state.app_user["id"]` directly, which is guaranteed to be present for any request that reached the handler.
 
-- `POST /auth/logout`
-- `GET /auth/verify`
-
-**Token verification:**
-
-```python
-user = supabase.auth.get_user(token)
-```
-
-If the token is invalid or expired, a `401 Unauthorized` error is returned.
-
-**Refresh flow:**
-
-Clients call `POST /auth/refresh` with their `refresh_token` to obtain a new `access_token`.
-
-**Password reset:**
-
-1. Client calls `POST /auth/forgot-password` with an email.
-2. Supabase sends a reset email containing a one-time `access_token`.
-3. Client calls `POST /auth/reset-password` with the token and new password.
+This design means authentication is enforced exactly once, at a single point, making it impossible to accidentally ship an unauthenticated endpoint.
 
 ---
 
-## 5. Middleware
+## 5. Middleware Stack
 
-### Rate Limiting
+Three middleware components apply to all requests, in this evaluation order:
 
-**Implementation:** `RateLimitMiddleware` (applied globally)
+| Order | Middleware | Scope | Mechanism |
+|-------|-----------|-------|-----------|
+| 1 | `RateLimitMiddleware` | `POST /query` only | Redis `INCR` + `EXPIRE`; rejects with `429` when counter exceeds threshold |
+| 2 | `access_token_middleware` | All non-public paths | Supabase JWT verification; rejects with `401` on failure |
+| 3 | `api_timing_middleware` | All paths (opt-in) | Attaches `request_id`; emits `[timing] stage=api.total` on completion |
 
-**Target:** Only `POST /query` requests.
-
-**Algorithm:**
+**Rate limiting implementation:**
 
 ```python
 key = f"rate_limit:{client_ip}"
-current = redis.incr(key)
+current = await redis.incr(key)
 if current == 1:
-    redis.expire(key, RATE_LIMIT_WINDOW_SECONDS)
+    await redis.expire(key, RATE_LIMIT_WINDOW_SECONDS)  # TTL set only on first hit
 if current > RATE_LIMIT_REQUESTS:
     raise HTTPException(status_code=429)
 ```
 
-**Defaults:**
+Setting the TTL only when `current == 1` is important — it prevents the window from being extended on every request, which would effectively never expire a frequently-hitting IP.
 
-- `RATE_LIMIT_REQUESTS = 10`
-- `RATE_LIMIT_WINDOW_SECONDS = 60`
+**Timing middleware:**
 
-**Scope:** Per IP address.
+Enabled when `APP_ENV ∈ {dev, development, local}` or `ENABLE_TIMING=true`. Produces structured timing output keyed by `request_id`:
 
-**Bypass:** Non-query routes are not rate-limited.
-
-### API Key Middleware
-
-**Implementation:** `APIKeyMiddleware` (doc_ingestion module)
-
-**Purpose:** Restrict document ingestion endpoints to trusted backend services (e.g., a Java microservice).
-
-**Header:** `X-API-KEY: <value>`
-
-**Validation:**
-
-```python
-server_key = os.getenv("JAVA_BACKEND_API_KEY")
-client_key = request.headers.get("X-API-KEY")
-if client_key != server_key:
-    return 401 Unauthorized
+```
+[timing] request=<uuid> stage=query.embedding elapsed_ms=14.21
+[timing] request=<uuid> stage=query.bm25_search elapsed_ms=48.93 top_k=20
+[timing] request=<uuid> stage=query.dense_search elapsed_ms=35.67 top_k=20
+[timing] request=<uuid> stage=query.rrf.fuse elapsed_ms=0.41 bm25_count=19 dense_count=20
+[timing] request=<uuid> stage=query.rerank elapsed_ms=198.44 candidate_count=20 top_k=10
+[timing] request=<uuid> stage=query.llm.invoke elapsed_ms=843.72 model=primary
+[timing] request=<uuid> stage=api.total elapsed_ms=1170.83
 ```
 
-**Exempted routes:**
-
-- `/`, `/health`, `/docs`, `/openapi.json`
+All per-stage timers are implemented as no-op context managers when disabled, contributing zero overhead in production.
 
 ---
 
-## 6. Database Architecture
+## 6. Data Layer
 
-The system uses **four databases**, each optimized for a specific purpose.
+Four data stores are used, each selected for a specific role:
 
-### PostgreSQL
+### Supabase (PostgreSQL)
 
-**Role:** Relational metadata store.
+The primary relational store for all structured metadata.
 
-**Tables:**
+| Table | Purpose | Notable Columns |
+|-------|---------|----------------|
+| `docs` | Document metadata and lifecycle status | `user_id`, `content_hash`, `status` (`pending` → `processing` → `ingested` / `failed` / `deleted`) |
+| `chunks` | Mapping between SQL documents and vector store entries | `document_id`, `vector_id`, `chunk_index`, `content` |
+| `conversations` | Conversation thread records | `user_id`, `title`, `updated_at` |
+| `messages` | Individual query/answer turns | `conversation_id`, `role` (`user`/`assistant`), `content` |
+| `intent` | Intent classification log | `query`, `intent` |
 
-1. **`doc`** — Document records
-2. **`chunks`** — Chunk metadata (links to Qdrant vectors)
-3. **`intent`** — Intent classification logs
-
-**ORM:** SQLAlchemy (declarative models)
-
-**Connection pool:**
-
-```python
-engine = create_engine(
-    DATABASE_URL,
-    connect_args={"sslmode": "verify-full", "sslrootcert": "certs/prod-ca-2021.crt"},
-    pool_pre_ping=True,
-    pool_recycle=3600
-)
-```
-
-**Session management:**
-
-```python
-def get_db():
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
-```
+All data access goes through the Supabase REST client, enabling Row Level Security policies to be applied at the database layer independently of application code.
 
 ### Qdrant
 
-**Role:** Vector database for embeddings and nearest-neighbor search.
+Dense vector store for semantic similarity search.
 
-**Client:**
+- **Collection naming:** `user_<user_id>` — one collection per user, providing hard storage isolation
+- **Vector configuration:** 384 dimensions, cosine distance metric
+- **Point payload:** `{document_id, source, chunk_index, text, user_id}`
 
-```python
-qdrant = QdrantClient(url=QDRANT_URL, api_key=QDRANT_API_KEY)
-```
+The `user_id` in the payload is informational context. The collection boundary is the actual isolation mechanism — a query issued to `user_<alice>` structurally cannot return results from `user_<bob>`.
 
-**Per-tenant collections:**
+### Elasticsearch
 
-Each tenant's vectors are isolated in a dedicated collection: `tenant_<tenant_id>`.
+Sparse BM25 index for keyword-based retrieval.
 
-**Vector config:**
-
-```python
-VectorParams(size=384, distance=Distance.COSINE)
-```
-
-**Search API:**
-
-```python
-qdrant.query_points(
-    collection_name="tenant_42",
-    query=[...],
-    limit=5
-)
-```
+- **Index:** Single shared index `rag_chunks`; user isolation is enforced via `filter: term: user_id` on every query and `delete_by_query` on every deletion
+- **Document ID scheme:** `user_id:document_id:chunk_index` (deterministic, supports idempotent re-indexing)
+- **Field mappings:** `user_id` and `source` as `keyword`; `text` as `text` (analysed for BM25)
+- **Development deployment:** Docker Compose, single-node, security disabled, 512 MB JVM heap
 
 ### Redis
 
-**Role:** Cache and rate limiter.
+In-memory store for cache and rate limiting.
 
-**Client:**
+| Use | Key Pattern | TTL |
+|-----|-------------|-----|
+| Semantic query cache | `query_cache:sha256(user_id:query_text)` | `CACHE_TTL_SECONDS` (default: 600s) |
+| IP rate limiting | `rate_limit:<client_ip>` | `RATE_LIMIT_WINDOW_SECONDS` (default: 60s) |
 
-```python
-redis = redis.from_url(REDIS_URL, decode_responses=True)
-```
-
-**Use cases:**
-
-1. **Semantic query cache** — stores query results keyed by SHA-256 hash.
-2. **Rate limiting** — tracks request counts per IP with TTL.
-
-**Asynchronous operations:**
-
-Redis is accessed asynchronously in query endpoints using the `redis.asyncio` client.
-
-### MongoDB
-
-**Role:** Append-only operational logs (audit trail).
-
-**Collections:**
-
-1. **`ingestion_logs`** — document upload events
-2. **`query_logs`** — query invocations with full context
-
-**Client:**
-
-```python
-mongo_async_client = AsyncIOMotorClient(MONGO_URI)
-mongo_async_db = mongo_async_client[MONGO_DB]
-```
-
-**Log schema (query_logs):**
-
-```json
-{
-  "query_id": "uuid",
-  "query_text": "What is the capital of France?",
-  "response": {
-    "answer": "Paris.",
-    "token_usage": {...}
-  },
-  "intent": "simple",
-  "status": "success",
-  "timestamp": "2026-07-07T10:15:30Z"
-}
-```
+The query path uses `redis.asyncio` for non-blocking I/O. The rate limiter uses the same async client via `get_redis()`, a lazy-initialised singleton.
 
 ---
 
 ## 7. Configuration
 
-**Primary config file:** `config/config.yaml`
+### LLM Model Registry
 
-**Model definitions:**
+`query/config/config.yaml` is the single source of truth for all model definitions and routing rules. It is parsed once at startup and passed to `ModelRouter`. Modifying it requires a server restart.
 
 ```yaml
 models:
   primary:
     provider: groq
-    model_name: llama-3.3-70b-versatile
+    model_name: openai/gpt-oss-120b
     max_tokens: 4096
     cost_per_1k_input: 0.0006
     cost_per_1k_output: 0.0008
     avg_latency_ms: 850
     tier: expensive
-```
 
-**Routing rules:**
+  fast:
+    provider: groq
+    model_name: llama-3.1-8b-instant
+    max_tokens: 2048
+    cost_per_1k_input: 0.00005
+    cost_per_1k_output: 0.00008
+    avg_latency_ms: 200
+    tier: cheap
 
-```yaml
+  fallback:
+    provider: openrouter
+    model_name: google/gemma-4-31b-it:free
+    max_tokens: 8192
+    cost_per_1k_input: 0.00010
+    cost_per_1k_output: 0.00040
+    avg_latency_ms: 600
+    tier: cheap
+
 routing_rules:
   use_intent_classifier: true
   simple_query_model: fast
   default_model: primary
   fallback_chain: [primary, fast, fallback]
+  latency_threshold_ms: 3000
+  error_threshold_pct: 5
 ```
 
-**Environment overrides:**
+### Application Settings
 
-All secrets and endpoint URLs are loaded from `.env` using Pydantic Settings:
-
-```python
-class Settings(BaseSettings):
-    GROQ_API_KEY: str | None = None
-    REDIS_URL: str = "redis://localhost:6379/0"
-    ...
-    model_config = SettingsConfigDict(env_file=".env")
-```
-
----
-
-## 8. Observability
-
-### Logs
-
-The system writes structured logs to:
-
-1. **Console (stdout)** — FastAPI request logs, error traces.
-2. **MongoDB** — Ingestion and query event logs.
-
-### Metrics (Future)
-
-Token usage, latency, and error rates are tracked in-memory by the `ModelRouter`. These could be exported to:
-
-- **Prometheus** (via `/metrics` endpoint)
-- **CloudWatch** / **Datadog** (via agent)
-
-### Trace IDs
-
-Every query generates a unique `query_id` (UUID). This ID appears in:
-
-- The API response
-- MongoDB logs
-- Console logs
-
-This enables full request tracing across all systems.
+All environment variables are declared and validated in `config/settings.py` using `pydantic-settings`. The settings object is a module-level singleton imported wherever configuration is needed. Accessing an unset required variable raises a `ValidationError` at startup with a clear field-level error message.

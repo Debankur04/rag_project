@@ -1,452 +1,388 @@
 # API Reference
 
-This document is the authoritative reference for all HTTP endpoints exposed by the RAG Backend API. The server is a FastAPI application running under Uvicorn.
+Complete HTTP API documentation for the Hybrid RAG Backend.
 
-**Base URL (local):** `http://localhost:8000`  
-**Interactive docs:** `http://localhost:8000/docs` (Swagger UI)  
-**OpenAPI schema:** `http://localhost:8000/openapi.json`
-
----
-
-## Table of Contents
-
-1. [Global Conventions](#1-global-conventions)
-2. [System Routes](#2-system-routes)
-3. [Authentication — `/auth`](#3-authentication----auth)
-   - [POST /auth/register](#post-authregister)
-   - [POST /auth/login](#post-authlogin)
-   - [POST /auth/logout](#post-authlogout)
-   - [POST /auth/refresh](#post-authrefresh)
-   - [GET /auth/verify](#get-authverify)
-   - [POST /auth/forgot-password](#post-authforgot-password)
-   - [POST /auth/reset-password](#post-authreset-password)
-4. [Document Ingestion — `/doc_ingestion`](#4-document-ingestion)
-   - [POST /add_doc](#post-add_doc)
-   - [POST /add_docs](#post-add_docs)
-   - [DELETE /delete_doc](#delete-delete_doc)
-   - [DELETE /delete_tenant](#delete-delete_tenant)
-5. [Query — `/query`](#5-query)
-   - [POST /query](#post-query)
-6. [Error Reference](#6-error-reference)
+| | |
+|---|---|
+| **Base URL** | `http://localhost:8000` |
+| **Interactive Docs** | `http://localhost:8000/docs` (Swagger UI, JWT-enabled) |
+| **OpenAPI Schema** | `http://localhost:8000/openapi.json` |
 
 ---
 
-## 1. Global Conventions
+## Contents
 
-### Content Type
+1. [Authentication & Global Conventions](#1-authentication--global-conventions)
+2. [System Endpoints](#2-system-endpoints)
+3. [Auth — `/auth`](#3-auth----auth)
+4. [Document Ingestion](#4-document-ingestion)
+5. [Query](#5-query)
+6. [Conversations](#6-conversations)
+7. [Error Reference](#7-error-reference)
 
-All request bodies are `application/json` unless the endpoint accepts file uploads, in which case the body is `multipart/form-data`.
+---
 
-### Authentication
+## 1. Authentication & Global Conventions
 
-Routes in the `doc_ingestion` module are protected by an **API Key** passed in the `X-API-KEY` request header. This key is configured server-side via the `JAVA_BACKEND_API_KEY` environment variable and is intended for machine-to-machine calls (e.g., from a Java backend service).
+### Bearer Token Authentication
 
-Routes in the `auth` module and the `/query` endpoint do not enforce an API key by default. The `/auth/verify` and `/auth/logout` endpoints require a **Bearer token** in the `Authorization` header.
+All endpoints except the public paths listed below require a valid **Supabase JWT** passed as a Bearer token:
+
+```
+Authorization: Bearer <access_token>
+```
+
+Tokens are issued by `POST /auth/login` and `POST /auth/register`. The authenticated user's identity is extracted from the token by the global middleware and injected into `request.state.app_user` — routes never accept a `user_id` parameter, and ownership is always derived from the token.
+
+**Public paths (no token required):**
+
+```
+GET  /
+GET  /health
+POST /auth/register
+POST /auth/login
+POST /auth/refresh
+POST /auth/forgot-password
+POST /auth/reset-password
+GET  /docs
+GET  /redoc
+GET  /openapi.json
+```
+
+Requests to any other path with a missing or invalid token receive `HTTP 401 Unauthorized`.
 
 ### Rate Limiting
 
-The `POST /query` endpoint is rate-limited per client IP address using Redis.
+`POST /query` is rate-limited per client IP address using Redis atomic counters.
 
-- **Default limit:** 10 requests per 60-second window.
-- **Configurable via:** `RATE_LIMIT_REQUESTS` and `RATE_LIMIT_WINDOW_SECONDS` environment variables.
-- **Exceeded response:** `HTTP 429` with a descriptive message.
+| Setting | Default | Environment Variable |
+|---------|---------|---------------------|
+| Max requests per window | 10 | `RATE_LIMIT_REQUESTS` |
+| Window duration | 60 seconds | `RATE_LIMIT_WINDOW_SECONDS` |
+| Response when exceeded | `HTTP 429` | — |
 
-### Response Envelope
+### Content Types
 
-All error responses follow this shape:
+- JSON bodies: `Content-Type: application/json`
+- File uploads: `Content-Type: multipart/form-data`
 
-```json
-{
-  "detail": "Human-readable error message"
-}
-```
+### Error Envelope
 
-Success response shapes are endpoint-specific and documented below.
-
----
-
-## 2. System Routes
-
-### GET /
-
-Health probe. Returns a simple confirmation that the server is running.
-
-**Authentication:** None  
-**Rate limited:** No
-
-#### Response `200 OK`
+All error responses follow a consistent structure:
 
 ```json
 {
-  "message": "RAG Backend Running"
+  "detail": "A human-readable description of what went wrong."
 }
 ```
 
----
+### Request Tracing
 
-### GET /health
-
-Database health check. Verifies that the PostgreSQL connection is live.
-
-**Authentication:** None  
-**Rate limited:** No
-
-#### Response `200 OK`
-
-```json
-{
-  "status": "ok"
-}
-```
-
-#### Response `503 Service Unavailable`
-
-```json
-{
-  "detail": "Database connection failed"
-}
-```
+Pass an `x-request-id` header to correlate timing logs across pipeline stages. If omitted, the server generates a UUID and returns it in the response header under the same key.
 
 ---
 
-## 3. Authentication — `/auth`
+## 2. System Endpoints
 
-All authentication is backed by **Supabase Auth**. Supabase issues standard JWTs. Tokens can be used directly with any Supabase-integrated resource or verified through the `/auth/verify` endpoint.
+### `GET /`
 
----
-
-### POST /auth/register
-
-Register a new user account.
+Root liveness probe. Returns immediately with no dependencies checked.
 
 **Authentication:** None
 
-#### Request Body
+**Response `200 OK`**
+```json
+{ "message": "RAG Backend Running" }
+```
 
+---
+
+### `GET /health`
+
+Dependency health check. Verifies Supabase connectivity.
+
+**Authentication:** None
+
+**Response `200 OK`**
+```json
+{ "status": "ok" }
+```
+
+---
+
+## 3. Auth — `/auth`
+
+All authentication flows delegate to **Supabase Auth**, which issues industry-standard JWTs. The backend acts as a thin proxy that forwards credentials to Supabase and normalises the response shape.
+
+---
+
+### `POST /auth/register`
+
+Create a new user account.
+
+**Authentication:** None
+
+**Request Body**
 ```json
 {
-  "email": "user@example.com",
-  "password": "securepassword123"
+  "email": "engineer@example.com",
+  "password": "StrongPassword123"
 }
 ```
 
-| Field | Type | Required | Constraints |
-|-------|------|----------|-------------|
-| `email` | string | Yes | Valid email format, 3–320 characters. Normalized to lowercase. |
-| `password` | string | Yes | 8–128 characters. |
+| Field | Type | Constraints |
+|-------|------|-------------|
+| `email` | string | Valid RFC 5322 address, 3–320 characters. Normalised to lowercase before processing. |
+| `password` | string | 8–128 characters. |
 
-#### Response `200 OK`
-
+**Response `200 OK`**
 ```json
 {
-  "message": "Registration successful",
+  "message": "Registration successful. Please check your email if confirmation is enabled.",
   "user": {
-    "id": "uuid-string",
-    "email": "user@example.com",
-    "created_at": "2026-07-07T10:00:00Z"
+    "id": "3f2a1b4c-...",
+    "email": "engineer@example.com",
+    "created_at": "2026-07-16T10:00:00.000Z"
+  },
+  "app_user": {
+    "id": "3f2a1b4c-...",
+    "email": "engineer@example.com",
+    "auth_user_id": "3f2a1b4c-..."
   },
   "session": {
     "access_token": "<jwt>",
-    "refresh_token": "<token>",
+    "refresh_token": "<opaque-token>",
     "expires_in": 3600,
     "token_type": "bearer",
-    "user": {
-      "id": "uuid-string",
-      "email": "user@example.com",
-      "created_at": "2026-07-07T10:00:00Z"
-    }
+    "user": { "..." },
+    "app_user": { "..." }
   }
 }
 ```
 
-> **Note:** Depending on Supabase email confirmation settings, `session` may be `null` until the user confirms their email.
+> **Note:** `session` will be `null` when Supabase email confirmation is required. The user must confirm their email before a session is issued.
 
-#### Response `400 Bad Request`
-
+**Response `400 Bad Request`**
 ```json
-{
-  "detail": "Unable to register user"
-}
+{ "detail": "Unable to register user" }
 ```
 
 ---
 
-### POST /auth/login
+### `POST /auth/login`
 
-Authenticate with email and password, returning a session.
+Authenticate with email and password and receive a session.
 
 **Authentication:** None
 
-#### Request Body
-
+**Request Body**
 ```json
 {
-  "email": "user@example.com",
-  "password": "securepassword123"
+  "email": "engineer@example.com",
+  "password": "StrongPassword123"
 }
 ```
 
-| Field | Type | Required | Constraints |
-|-------|------|----------|-------------|
-| `email` | string | Yes | Valid email format. |
-| `password` | string | Yes | 1–128 characters. |
-
-#### Response `200 OK`
-
+**Response `200 OK`**
 ```json
 {
   "access_token": "<jwt>",
-  "refresh_token": "<token>",
+  "refresh_token": "<opaque-token>",
   "expires_in": 3600,
   "token_type": "bearer",
   "user": {
-    "id": "uuid-string",
-    "email": "user@example.com",
-    "created_at": "2026-07-07T10:00:00Z"
+    "id": "3f2a1b4c-...",
+    "email": "engineer@example.com",
+    "created_at": "2026-07-16T10:00:00.000Z"
+  },
+  "app_user": {
+    "id": "3f2a1b4c-...",
+    "email": "engineer@example.com"
   }
 }
 ```
 
-#### Response `401 Unauthorized`
-
+**Response `401 Unauthorized`**
 ```json
-{
-  "detail": "Invalid email or password"
-}
+{ "detail": "Invalid email or password" }
 ```
 
 ---
 
-### POST /auth/logout
+### `POST /auth/logout`
 
-Invalidate the current session.
+Invalidate the current session token.
 
-**Authentication:** `Authorization: Bearer <access_token>` (required)
+**Authentication:** `Authorization: Bearer <access_token>` *(required)*
 
-#### Request Body
-
-None.
-
-#### Response `200 OK`
-
+**Response `200 OK`**
 ```json
-{
-  "message": "Logged out"
-}
+{ "message": "Logged out" }
 ```
 
-#### Response `401 Unauthorized`
-
+**Response `401 Unauthorized`**
 ```json
-{
-  "detail": "Missing bearer token"
-}
-```
-
-```json
-{
-  "detail": "Unable to log out"
-}
+{ "detail": "Missing bearer token" }
 ```
 
 ---
 
-### POST /auth/refresh
+### `POST /auth/refresh`
 
-Exchange a refresh token for a new access token.
+Exchange an expired access token for a new one using a refresh token.
 
 **Authentication:** None
 
-#### Request Body
-
+**Request Body**
 ```json
 {
-  "refresh_token": "<refresh-token>"
+  "refresh_token": "<opaque-token>"
 }
 ```
 
-| Field | Type | Required | Constraints |
-|-------|------|----------|-------------|
-| `refresh_token` | string | Yes | Minimum 16 characters. |
+| Field | Constraints |
+|-------|-------------|
+| `refresh_token` | Minimum 16 characters |
 
-#### Response `200 OK`
+**Response `200 OK`**
 
-Returns a full session payload identical in shape to the `/auth/login` response.
+Returns a full session payload with the same shape as `POST /auth/login`.
 
+**Response `401 Unauthorized`**
 ```json
-{
-  "access_token": "<new-jwt>",
-  "refresh_token": "<new-refresh-token>",
-  "expires_in": 3600,
-  "token_type": "bearer",
-  "user": { ... }
-}
-```
-
-#### Response `401 Unauthorized`
-
-```json
-{
-  "detail": "Invalid refresh token"
-}
+{ "detail": "Invalid refresh token" }
 ```
 
 ---
 
-### GET /auth/verify
+### `GET /auth/verify`
 
-Verify that a bearer token is valid and retrieve the associated user.
+Verify a bearer token and retrieve the associated user profile.
 
-**Authentication:** `Authorization: Bearer <access_token>` (required)
+**Authentication:** `Authorization: Bearer <access_token>` *(required)*
 
-#### Request Body
-
-None.
-
-#### Response `200 OK`
-
+**Response `200 OK`**
 ```json
 {
   "user": {
-    "id": "uuid-string",
-    "email": "user@example.com",
-    "created_at": "2026-07-07T10:00:00Z"
+    "id": "3f2a1b4c-...",
+    "email": "engineer@example.com",
+    "created_at": "2026-07-16T10:00:00.000Z"
+  },
+  "app_user": {
+    "id": "3f2a1b4c-...",
+    "email": "engineer@example.com"
   }
 }
 ```
 
-#### Response `401 Unauthorized`
-
+**Response `401 Unauthorized`**
 ```json
-{
-  "detail": "Missing bearer token"
-}
-```
-
-```json
-{
-  "detail": "Invalid bearer token"
-}
+{ "detail": "Invalid bearer token" }
 ```
 
 ---
 
-### POST /auth/forgot-password
+### `POST /auth/forgot-password`
 
-Trigger a password reset email.
+Trigger a password reset email to the specified address.
 
 **Authentication:** None
 
-#### Request Body
-
+**Request Body**
 ```json
-{
-  "email": "user@example.com"
-}
+{ "email": "engineer@example.com" }
 ```
 
-#### Response `200 OK`
-
+**Response `200 OK`**
 ```json
-{
-  "message": "Password reset email sent"
-}
+{ "message": "Password reset email sent" }
 ```
 
-#### Response `400 Bad Request`
-
-```json
-{
-  "detail": "Unable to send password reset email"
-}
-```
+> The response is always `200 OK` regardless of whether the email address exists, to prevent user enumeration.
 
 ---
 
-### POST /auth/reset-password
+### `POST /auth/reset-password`
 
-Set a new password using the access token received in the reset email.
+Set a new password using the short-lived access token received in the reset email.
 
-**Authentication:** None (the `access_token` field carries the authorization)
+**Authentication:** None *(the `access_token` field carries the one-time authorisation)*
 
-#### Request Body
-
+**Request Body**
 ```json
 {
   "access_token": "<token-from-reset-email>",
-  "password": "newSecurePassword123"
+  "password": "NewStrongPassword123"
 }
 ```
 
-| Field | Type | Required | Constraints |
-|-------|------|----------|-------------|
-| `access_token` | string | Yes | Minimum 16 characters. |
-| `password` | string | Yes | 8–128 characters. |
+| Field | Constraints |
+|-------|-------------|
+| `access_token` | Minimum 16 characters |
+| `password` | 8–128 characters |
 
-#### Response `200 OK`
-
+**Response `200 OK`**
 ```json
-{
-  "message": "Password updated"
-}
+{ "message": "Password updated" }
 ```
 
-#### Response `401 Unauthorized`
-
+**Response `401 Unauthorized`**
 ```json
-{
-  "detail": "Unable to reset password"
-}
+{ "detail": "Unable to reset password" }
 ```
 
 ---
 
 ## 4. Document Ingestion
 
-All document ingestion endpoints require the `X-API-KEY` header to be set to the value of the `JAVA_BACKEND_API_KEY` environment variable.
-
-```
-X-API-KEY: <server-configured-key>
-```
-
-Requests that omit or provide an incorrect key will receive `HTTP 401`.
+All document endpoints require a valid Bearer token. The `user_id` is always derived from the JWT — it is never accepted as a request parameter. Each user's documents are isolated in a dedicated Qdrant collection (`user_<id>`) and filtered by `user_id` in the shared Elasticsearch index.
 
 ---
 
-### POST /add_doc
+### `POST /add_doc`
 
-Upload and ingest a PDF document for a specific tenant. The document is chunked, embedded, and stored in the tenant's vector collection in Qdrant, with metadata persisted to PostgreSQL.
+Upload and ingest a single PDF document.
 
-**Authentication:** `X-API-KEY` header  
+**Authentication:** Bearer token  
 **Content-Type:** `multipart/form-data`
 
-#### Request Body (Form Data)
+**Form Fields**
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `tenant_id` | integer | Yes | The numeric tenant identifier. Scopes the document and its vectors to this tenant. |
-| `file` | file (binary) | Yes | The PDF file to ingest. Only `.pdf` files are accepted. |
+| `file` | binary (PDF) | Yes | The document to ingest. Only `.pdf` files are accepted. |
 
-#### Example (curl)
+**What happens during ingestion:**
 
+1. File is saved to a temporary path and validated.
+2. A SHA-256 content hash is computed for duplicate detection.
+3. Text is extracted via PyPDF; scanned PDFs fall back to Tesseract OCR with OpenCV preprocessing.
+4. Text is split using `RecursiveCharacterTextSplitter` (chunk size: 1,000 chars, overlap: 200 chars).
+5. Each chunk is embedded with `all-MiniLM-L6-v2` (384 dimensions).
+6. Vectors are upserted into the user's Qdrant collection.
+7. Chunks are bulk-indexed into Elasticsearch for BM25 retrieval.
+8. Chunk metadata is inserted into Supabase.
+9. Document status is updated to `ingested`.
+
+**Example**
 ```bash
 curl -X POST http://localhost:8000/add_doc \
-  -H "X-API-KEY: your-api-key" \
-  -F "tenant_id=42" \
-  -F "file=@/path/to/document.pdf"
+  -H "Authorization: Bearer <token>" \
+  -F "file=@/path/to/report.pdf"
 ```
 
-#### Response `200 OK` — New document ingested
-
+**Response `200 OK` — Document ingested**
 ```json
 {
-  "message": "Document ingestion completed",
-  "ingestion_id": "uuid-string",
+  "file_name": "report.pdf",
+  "ingestion_id": "a1b2c3d4-...",
   "status": "success",
+  "error": null,
   "document": {
-    "id": 1,
-    "tenant_id": 42,
-    "file_name": "document.pdf",
+    "id": 42,
+    "user_id": "3f2a1b4c-...",
+    "file_name": "report.pdf",
     "status": "ingested",
     "chunk_count": 47,
     "duplicate": false
@@ -454,102 +390,65 @@ curl -X POST http://localhost:8000/add_doc \
 }
 ```
 
-#### Response `200 OK` — Duplicate document detected
+**Response `200 OK` — Duplicate detected**
 
-If a document with the same SHA-256 content hash already exists in an `ingested` state for this tenant, ingestion is skipped and the existing record is returned.
+A document with the same content hash already exists and is fully ingested for this user. Processing is skipped and the existing record is returned.
 
 ```json
 {
-  "message": "Document ingestion completed",
-  "ingestion_id": "uuid-string",
+  "file_name": "report.pdf",
+  "ingestion_id": "a1b2c3d4-...",
   "status": "success",
+  "error": null,
   "document": {
-    "id": 1,
-    "tenant_id": 42,
-    "file_name": "document.pdf",
+    "id": 42,
+    "user_id": "3f2a1b4c-...",
+    "file_name": "report.pdf",
     "status": "ingested",
     "duplicate": true
   }
 }
 ```
 
-#### Response `400 Bad Request`
-
+**Response `400 Bad Request`**
 ```json
-{
-  "detail": "Only PDF uploads are supported"
-}
+{ "detail": "Only PDF uploads are supported" }
 ```
 
-#### Response `401 Unauthorized`
+**Response `500 Internal Server Error`**
+
+The document record is marked `failed` and all partial writes to Qdrant and Elasticsearch are rolled back atomically.
 
 ```json
-{
-  "detail": "Invalid or missing API Key"
-}
-```
-
-#### Response `500 Internal Server Error`
-
-Returned if text extraction, embedding, or database operations fail. The document record is marked `failed` and any partially written Qdrant vectors are rolled back.
-
-```json
-{
-  "detail": "No readable content found in PDF"
-}
+{ "detail": "No readable content found in PDF" }
 ```
 
 ---
 
-### POST /add_docs
+### `POST /add_docs`
 
-Upload and ingest **multiple** PDF documents in a single request. Each file is processed independently; failures in one file do not prevent other files from processing.
+Upload and ingest up to 10 PDF documents in a single request.
 
-**Authentication:** Bearer token (from `Authorization` header)  
-**Content-Type:** `multipart/form-data`  
-**Maximum files per request:** 10
+**Authentication:** Bearer token  
+**Content-Type:** `multipart/form-data`
 
-#### Request Body (Form Data)
+**Form Fields**
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `files` | file[] (binary) | Yes | Array of PDF files to ingest. Only `.pdf` files are accepted. Minimum 1, maximum 10 files. |
+| `files` | binary[] (PDF) | Yes | One or more PDF files. Maximum 10 per request. |
 
-#### Example (curl)
+Each file is processed independently through the same pipeline as `/add_doc`. A failure on one file does not prevent the remaining files from processing.
 
+**Example**
 ```bash
 curl -X POST http://localhost:8000/add_docs \
-  -H "Authorization: Bearer <jwt-token>" \
-  -F "files=@/path/to/document1.pdf" \
-  -F "files=@/path/to/document2.pdf" \
-  -F "files=@/path/to/document3.pdf"
+  -H "Authorization: Bearer <token>" \
+  -F "files=@report-q3.pdf" \
+  -F "files=@report-q4.pdf"
 ```
 
-#### Example (JavaScript/Fetch)
-
-```javascript
-const files = document.querySelector('input[type="file"]').files; // Multiple files
-const formData = new FormData();
-
-// Add all files to FormData
-for (const file of files) {
-  formData.append('files', file);
-}
-
-const response = await fetch('/add_docs', {
-  method: 'POST',
-  headers: {
-    'Authorization': `Bearer ${token}`
-  },
-  body: formData
-});
-
-const result = await response.json();
-console.log(`Uploaded ${result.success}/${result.total} files successfully`);
-```
-
-#### Response `200 OK` — Bulk upload completed
-
+**Response `200 OK`**
 ```json
 {
   "message": "Bulk document ingestion completed",
@@ -558,35 +457,21 @@ console.log(`Uploaded ${result.success}/${result.total} files successfully`);
   "failed": 1,
   "results": [
     {
-      "file_name": "document1.pdf",
-      "ingestion_id": "uuid-string",
+      "file_name": "report-q3.pdf",
+      "ingestion_id": "a1b2c3d4-...",
       "status": "success",
       "error": null,
-      "document": {
-        "id": 1,
-        "user_id": "user-uuid",
-        "file_name": "document1.pdf",
-        "status": "ingested",
-        "chunk_count": 47,
-        "duplicate": false
-      }
+      "document": { "id": 43, "chunk_count": 38, "duplicate": false, "..." }
     },
     {
-      "file_name": "document2.pdf",
-      "ingestion_id": "uuid-string",
+      "file_name": "report-q4.pdf",
+      "ingestion_id": "b2c3d4e5-...",
       "status": "success",
       "error": null,
-      "document": {
-        "id": 2,
-        "user_id": "user-uuid",
-        "file_name": "document2.pdf",
-        "status": "ingested",
-        "chunk_count": 23,
-        "duplicate": false
-      }
+      "document": { "id": 44, "chunk_count": 41, "duplicate": false, "..." }
     },
     {
-      "file_name": "image.png",
+      "file_name": "presentation.pptx",
       "ingestion_id": null,
       "status": "failed",
       "error": "Only PDF uploads are supported",
@@ -596,156 +481,75 @@ console.log(`Uploaded ${result.success}/${result.total} files successfully`);
 }
 ```
 
-**Response Fields:**
+**Response `400 Bad Request`**
+```json
+{ "detail": "No files provided. At least one file is required." }
+```
+```json
+{ "detail": "Maximum 10 files per request. Please upload in batches." }
+```
 
-| Field | Type | Description |
-|-------|------|-------------|
-| `message` | string | Confirmation message. |
-| `total` | integer | Total number of files processed. |
-| `success` | integer | Number of files successfully ingested. |
-| `failed` | integer | Number of files that failed. |
-| `results` | array | Array of result objects, one per file. See below. |
+---
 
-**Per-File Result Object:**
+### `DELETE /delete_doc`
 
-| Field | Type | Description |
-|-------|------|-------------|
-| `file_name` | string | Name of the uploaded file. |
-| `ingestion_id` | string \| null | UUID of the ingestion attempt (null if failed). |
-| `status` | string | Either `"success"` or `"failed"`. |
-| `error` | string \| null | Error message (null if successful). |
-| `document` | object \| null | Document metadata (null if failed). Same shape as `/add_doc` response. |
+Permanently delete a specific document and all of its associated data.
 
-#### Response `400 Bad Request`
+**Authentication:** Bearer token  
+**Content-Type:** `application/json`
 
-Returned if:
-- No files are provided: `"No files provided. At least one file is required."`
-- More than 10 files: `"Maximum 10 files per request. Please upload in batches."`
-- Any file is not a PDF: `"Only PDF uploads are supported"` (file marked failed in results, others processed)
+Ownership is verified before deletion. Attempting to delete a document that belongs to another user returns `404 Not Found`.
 
+**Request Body**
 ```json
 {
-  "detail": "Maximum 10 files per request. Please upload in batches."
+  "doc_id": "42"
 }
 ```
 
-#### Response `401 Unauthorized`
+| Field | Type | Description |
+|-------|------|-------------|
+| `doc_id` | string | The numeric document ID as a string. |
 
+**Deletion is cascaded in this order:**
+1. Vectors are deleted from the user's Qdrant collection.
+2. Chunks are removed from the Elasticsearch index by `user_id` + `document_id`.
+3. Chunk metadata rows are deleted from the Supabase `chunks` table.
+4. The document's `status` is set to `"deleted"` in the Supabase `docs` table.
+
+**Response `200 OK`**
 ```json
 {
-  "detail": "Invalid or missing authentication token"
-}
-```
-
-#### Response `500 Internal Server Error`
-
-Returned if a file fails during text extraction, embedding, or database operations. The file is marked `failed` in the results, but other files continue processing.
-
-```json
-{
-  "message": "Bulk document ingestion completed",
-  "total": 3,
-  "success": 1,
-  "failed": 2,
-  "results": [
-    { "status": "success", ... },
-    {
-      "file_name": "corrupted.pdf",
-      "status": "failed",
-      "error": "No readable content found in PDF",
-      "document": null
-    }
-  ]
+  "document_id": 42,
+  "deleted_chunks": 47,
+  "deleted_vectors": 47
 }
 ```
 
 ---
 
-### DELETE /delete_doc
+### `DELETE /delete_user_data`
 
-Delete a specific document and all of its associated vector chunks.
+Permanently delete all documents, vectors, and chunks belonging to the authenticated user.
 
-**Authentication:** `X-API-KEY` header  
-**Content-Type:** `application/json`
+**Authentication:** Bearer token
 
-#### Request Body
+> ⚠️ **This operation is irreversible.** It drops the user's entire Qdrant vector collection, deletes all Elasticsearch chunks, and removes all `docs` and `chunks` rows from Supabase.
 
+**Deletion is cascaded in this order:**
+1. The entire `user_<id>` Qdrant collection is dropped.
+2. All Elasticsearch chunks for this user are deleted via `delete_by_query`.
+3. All Supabase `chunks` rows linked to the user's documents are deleted.
+4. All Supabase `docs` rows for the user are deleted.
+
+**Response `200 OK`**
 ```json
 {
-  "tenant_id": 42,
-  "doc_id": "1"
-}
-```
-
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `tenant_id` | integer | Yes | Owning tenant of the document. |
-| `doc_id` | string | Yes | The document's numeric ID (as a string). |
-
-#### Deletion Cascade
-
-1. Qdrant vectors for all chunks of this document are deleted from the `tenant_<id>` collection.
-2. Chunk records are deleted from the PostgreSQL `chunks` table.
-3. The document's `status` in the PostgreSQL `doc` table is set to `"deleted"`.
-
-#### Response `200 OK`
-
-```json
-{
-  "message": "Document deleted successfully"
-}
-```
-
-#### Response `401 Unauthorized`
-
-```json
-{
-  "detail": "Invalid or missing API Key"
-}
-```
-
----
-
-### DELETE /delete_tenant
-
-Delete all data for a tenant — their Qdrant collection, all document records, and all chunk records.
-
-**Authentication:** `X-API-KEY` header  
-**Content-Type:** `application/json`
-
-#### Request Body
-
-```json
-{
-  "tenant_id": "42"
-}
-```
-
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `tenant_id` | string | Yes | The tenant to purge. |
-
-> ⚠️ **Destructive operation.** This permanently removes the tenant's Qdrant collection and all associated PostgreSQL records. It cannot be undone.
-
-#### Deletion Cascade
-
-1. The entire `tenant_<id>` Qdrant collection is dropped.
-2. All `Chunk` rows with `tenant_id = <id>` are deleted.
-3. All `Document` rows with `tenant_id = <id>` are deleted.
-
-#### Response `200 OK`
-
-```json
-{
-  "message": "Tenant deleted successfully"
-}
-```
-
-#### Response `401 Unauthorized`
-
-```json
-{
-  "detail": "Invalid or missing API Key"
+  "message": "User documents deleted",
+  "result": {
+    "user_id": "3f2a1b4c-...",
+    "deleted_documents": 5
+  }
 }
 ```
 
@@ -753,85 +557,239 @@ Delete all data for a tenant — their Qdrant collection, all document records, 
 
 ## 5. Query
 
-### POST /query
+### `POST /query`
 
-Submit a natural language query against a tenant's ingested documents. The system retrieves semantically relevant chunks, constructs a grounded prompt, and returns an LLM-generated answer.
+Submit a natural language query against the authenticated user's ingested documents and receive a grounded, LLM-generated answer.
 
-**Authentication:** None (rate-limited by IP)  
-**Content-Type:** `application/json`
+**Authentication:** Bearer token  
+**Rate limit:** 10 requests per 60-second window per IP
 
-#### Request Body
-
+**Request Body**
 ```json
 {
-  "text": "What are the key findings in the Q3 financial report?",
-  "tenant_id": 42
+  "text": "What are the key risk factors identified in the Q3 financial report?",
+  "conversation_id": 7
 }
 ```
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `text` | string | Yes | The natural language query. |
-| `tenant_id` | integer | Yes | The tenant whose documents to search. |
+| `text` | string | Yes | The natural language question. |
+| `conversation_id` | integer | No | Attach this query to an existing conversation. If omitted, a new conversation is created automatically, using the first 80 characters of the query as its title. |
 
-#### Processing Pipeline
+**Retrieval Pipeline (on cache miss):**
 
-1. Check Redis cache — if a matching response exists (SHA-256 keyed on query text), return it immediately.
-2. Sanitize input — detect prompt injection, mask PII (SSNs, credit cards), score risk.
-3. Embed the query using `all-MiniLM-L6-v2`.
-4. Search the tenant's Qdrant collection for the top-5 most similar chunks.
-5. Classify query intent — route to the fast model (Llama 3.1 8B) for simple queries, primary model (Llama 3.3 70B) for complex ones.
-6. Build a grounded system prompt with the retrieved context.
-7. Invoke the selected LLM. Validate and sanitize output.
-8. Cache the result and log to MongoDB.
+| Step | Operation |
+|------|-----------|
+| 1 | Sanitize input — detect prompt injection patterns, mask high-risk PII |
+| 2 | Embed query with `all-MiniLM-L6-v2` |
+| 3 | BM25 search → top 20 candidates from Elasticsearch |
+| 4 | Dense search → top 20 candidates from Qdrant *(steps 3 and 4 run concurrently)* |
+| 5 | Reciprocal Rank Fusion → single merged and ranked list |
+| 6 | Cohere cross-encoder reranking → top 10 final candidates |
+| 7 | Classify query intent → route to appropriate LLM tier |
+| 8 | Build grounded prompt, invoke selected model |
+| 9 | Validate output (length, repetition, hallucination signals) |
+| 10 | Cache result in Redis; persist answer to conversation history |
 
-#### Response `200 OK`
-
+**Response `200 OK`**
 ```json
 {
-  "query_id": "uuid-string",
-  "answer": "The Q3 report highlights a 12% revenue increase driven by...",
+  "query_id": "c9d8e7f6-...",
+  "conversation_id": 7,
+  "answer": "The Q3 report identifies three primary risk factors: currency volatility...",
   "token_usage": {
-    "input_tokens": 1024,
-    "output_tokens": 256,
-    "model": "llama-3.3-70b-versatile"
+    "input_tokens": 1248,
+    "output_tokens": 312,
+    "model": "openai/gpt-oss-120b"
   }
 }
 ```
 
-| Field | Type | Description |
-|-------|------|-------------|
-| `query_id` | string (UUID) | Unique identifier for this query invocation. Used for log tracing. |
-| `answer` | string | The LLM-generated answer, grounded in retrieved context. |
-| `token_usage` | object \| null | Token consumption details. `null` if served from cache. |
+| Field | Description |
+|-------|-------------|
+| `query_id` | Unique UUID for this invocation. Useful for log correlation and tracing. |
+| `conversation_id` | The conversation this query was appended to. |
+| `answer` | The LLM-generated answer, grounded exclusively in retrieved document chunks. |
+| `token_usage` | Token consumption and model used. Returns `null` when served from cache. |
 
-#### Response `429 Too Many Requests`
+**Response `429 Too Many Requests`**
+```json
+{ "detail": "Rate limit exceeded (10 requests per 60 seconds)" }
+```
 
+**Response `500 Internal Server Error`**
+```json
+{ "detail": "All models unhealthy - serving degraded response" }
+```
+
+---
+
+## 6. Conversations
+
+Conversations are persistent threads that group query/answer message pairs. They are stored in Supabase and fully owned by the authenticated user — no conversation data is accessible to other users.
+
+---
+
+### `POST /conversations`
+
+Explicitly create a new conversation with an optional title.
+
+> Note: conversations are also created automatically when `POST /query` is called without a `conversation_id`.
+
+**Authentication:** Bearer token
+
+**Request Body**
 ```json
 {
-  "detail": "Rate limit exceeded (10 requests per 60 seconds)"
+  "title": "Q3 Risk Analysis"
 }
 ```
 
-#### Response `500 Internal Server Error`
+| Field | Type | Required | Constraints |
+|-------|------|----------|-------------|
+| `title` | string | No | Max 255 characters. Defaults to `"New conversation"` if omitted. |
 
-Returned if all models in the fallback chain are unhealthy or if output validation fails.
-
+**Response `200 OK`**
 ```json
 {
-  "detail": "All models unhealthy — serving degraded response"
+  "id": 7,
+  "user_id": "3f2a1b4c-...",
+  "title": "Q3 Risk Analysis",
+  "created_at": "2026-07-16T10:00:00.000Z",
+  "updated_at": "2026-07-16T10:00:00.000Z"
 }
 ```
 
 ---
 
-## 6. Error Reference
+### `GET /conversations`
 
-| HTTP Status | Meaning | Common Causes |
-|-------------|---------|---------------|
-| `400 Bad Request` | Invalid request body or business rule violation | Malformed email, non-PDF file upload, missing required field |
-| `401 Unauthorized` | Authentication failure | Missing/invalid bearer token, missing/invalid API key, invalid credentials |
-| `422 Unprocessable Entity` | Pydantic validation failure | Field type mismatch, constraint violation (e.g., password too short) |
-| `429 Too Many Requests` | Rate limit exceeded | More than 10 `POST /query` requests per 60 seconds from the same IP |
-| `500 Internal Server Error` | Unhandled server-side error | PDF parse failure, all LLMs down, database connection error |
-| `503 Service Unavailable` | Dependency health check failure | PostgreSQL unreachable at startup health check |
+Retrieve all conversations belonging to the authenticated user, ordered by most recently updated.
+
+**Authentication:** Bearer token
+
+**Response `200 OK`**
+```json
+{
+  "conversations": [
+    {
+      "id": 7,
+      "user_id": "3f2a1b4c-...",
+      "title": "Q3 Risk Analysis",
+      "created_at": "2026-07-16T10:00:00.000Z",
+      "updated_at": "2026-07-16T10:48:00.000Z"
+    }
+  ]
+}
+```
+
+---
+
+### `GET /conversations/{conversation_id}`
+
+Retrieve a specific conversation along with its full message history, ordered chronologically.
+
+**Authentication:** Bearer token
+
+**Path Parameters**
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `conversation_id` | integer | The conversation's numeric ID. |
+
+**Response `200 OK`**
+```json
+{
+  "conversation": {
+    "id": 7,
+    "user_id": "3f2a1b4c-...",
+    "title": "Q3 Risk Analysis",
+    "created_at": "2026-07-16T10:00:00.000Z",
+    "updated_at": "2026-07-16T10:48:00.000Z"
+  },
+  "messages": [
+    {
+      "id": 1,
+      "conversation_id": 7,
+      "role": "user",
+      "content": "What are the key risk factors in the Q3 report?",
+      "created_at": "2026-07-16T10:01:00.000Z"
+    },
+    {
+      "id": 2,
+      "conversation_id": 7,
+      "role": "assistant",
+      "content": "The Q3 report identifies three primary risk factors...",
+      "created_at": "2026-07-16T10:01:03.000Z"
+    }
+  ]
+}
+```
+
+**Response `404 Not Found`**
+```json
+{ "detail": "Conversation not found for current user" }
+```
+
+---
+
+### `PATCH /conversations/{conversation_id}`
+
+Rename an existing conversation.
+
+**Authentication:** Bearer token
+
+**Request Body**
+```json
+{
+  "title": "Q3 Financial Risk Deep Dive"
+}
+```
+
+| Field | Constraints |
+|-------|-------------|
+| `title` | 1–255 characters, required |
+
+**Response `200 OK`**
+
+Returns the updated conversation object.
+
+**Response `404 Not Found`**
+```json
+{ "detail": "Conversation not found for current user" }
+```
+
+---
+
+### `DELETE /conversations/{conversation_id}`
+
+Delete a conversation and all of its messages.
+
+**Authentication:** Bearer token
+
+**Response `200 OK`**
+```json
+{
+  "conversation_id": 7,
+  "status": "deleted"
+}
+```
+
+**Response `404 Not Found`**
+```json
+{ "detail": "Conversation not found for current user" }
+```
+
+---
+
+## 7. Error Reference
+
+| Status Code | Meaning | Common Triggers |
+|-------------|---------|----------------|
+| `400 Bad Request` | The request was well-formed but violates a business rule | Non-PDF file upload, more than 10 files in a bulk request, missing required field |
+| `401 Unauthorized` | Authentication failed or token is absent | Missing `Authorization` header, expired JWT, invalid credentials on login |
+| `404 Not Found` | The resource does not exist or is owned by another user | Accessing a conversation or document that belongs to a different account |
+| `422 Unprocessable Entity` | Pydantic validation failure | Field type mismatch, value outside allowed constraints |
+| `429 Too Many Requests` | IP-level rate limit exceeded on `POST /query` | More than 10 requests within a 60-second window from the same IP |
+| `500 Internal Server Error` | Unhandled server-side failure | All LLM providers unhealthy, PDF extraction failure, storage connectivity issue |
