@@ -19,7 +19,6 @@ class Settings(BaseSettings):
 
     ELASTICSEARCH_URL: str = "http://localhost:9200"
     ELASTICSEARCH_INDEX: str = "rag_chunks"
-    BM25_CANDIDATE_LIMIT: int = 1000
     HYBRID_RETRIEVAL_TOP_K: int = 20
     HYBRID_RERANK_TOP_K: int = 10
 

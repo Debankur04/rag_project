@@ -22,6 +22,7 @@ This document is the authoritative reference for all HTTP endpoints exposed by t
    - [POST /auth/reset-password](#post-authreset-password)
 4. [Document Ingestion — `/doc_ingestion`](#4-document-ingestion)
    - [POST /add_doc](#post-add_doc)
+   - [POST /add_docs](#post-add_docs)
    - [DELETE /delete_doc](#delete-delete_doc)
    - [DELETE /delete_tenant](#delete-delete_tenant)
 5. [Query — `/query`](#5-query)
@@ -495,6 +496,166 @@ Returned if text extraction, embedding, or database operations fail. The documen
 ```json
 {
   "detail": "No readable content found in PDF"
+}
+```
+
+---
+
+### POST /add_docs
+
+Upload and ingest **multiple** PDF documents in a single request. Each file is processed independently; failures in one file do not prevent other files from processing.
+
+**Authentication:** Bearer token (from `Authorization` header)  
+**Content-Type:** `multipart/form-data`  
+**Maximum files per request:** 10
+
+#### Request Body (Form Data)
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `files` | file[] (binary) | Yes | Array of PDF files to ingest. Only `.pdf` files are accepted. Minimum 1, maximum 10 files. |
+
+#### Example (curl)
+
+```bash
+curl -X POST http://localhost:8000/add_docs \
+  -H "Authorization: Bearer <jwt-token>" \
+  -F "files=@/path/to/document1.pdf" \
+  -F "files=@/path/to/document2.pdf" \
+  -F "files=@/path/to/document3.pdf"
+```
+
+#### Example (JavaScript/Fetch)
+
+```javascript
+const files = document.querySelector('input[type="file"]').files; // Multiple files
+const formData = new FormData();
+
+// Add all files to FormData
+for (const file of files) {
+  formData.append('files', file);
+}
+
+const response = await fetch('/add_docs', {
+  method: 'POST',
+  headers: {
+    'Authorization': `Bearer ${token}`
+  },
+  body: formData
+});
+
+const result = await response.json();
+console.log(`Uploaded ${result.success}/${result.total} files successfully`);
+```
+
+#### Response `200 OK` — Bulk upload completed
+
+```json
+{
+  "message": "Bulk document ingestion completed",
+  "total": 3,
+  "success": 2,
+  "failed": 1,
+  "results": [
+    {
+      "file_name": "document1.pdf",
+      "ingestion_id": "uuid-string",
+      "status": "success",
+      "error": null,
+      "document": {
+        "id": 1,
+        "user_id": "user-uuid",
+        "file_name": "document1.pdf",
+        "status": "ingested",
+        "chunk_count": 47,
+        "duplicate": false
+      }
+    },
+    {
+      "file_name": "document2.pdf",
+      "ingestion_id": "uuid-string",
+      "status": "success",
+      "error": null,
+      "document": {
+        "id": 2,
+        "user_id": "user-uuid",
+        "file_name": "document2.pdf",
+        "status": "ingested",
+        "chunk_count": 23,
+        "duplicate": false
+      }
+    },
+    {
+      "file_name": "image.png",
+      "ingestion_id": null,
+      "status": "failed",
+      "error": "Only PDF uploads are supported",
+      "document": null
+    }
+  ]
+}
+```
+
+**Response Fields:**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `message` | string | Confirmation message. |
+| `total` | integer | Total number of files processed. |
+| `success` | integer | Number of files successfully ingested. |
+| `failed` | integer | Number of files that failed. |
+| `results` | array | Array of result objects, one per file. See below. |
+
+**Per-File Result Object:**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `file_name` | string | Name of the uploaded file. |
+| `ingestion_id` | string \| null | UUID of the ingestion attempt (null if failed). |
+| `status` | string | Either `"success"` or `"failed"`. |
+| `error` | string \| null | Error message (null if successful). |
+| `document` | object \| null | Document metadata (null if failed). Same shape as `/add_doc` response. |
+
+#### Response `400 Bad Request`
+
+Returned if:
+- No files are provided: `"No files provided. At least one file is required."`
+- More than 10 files: `"Maximum 10 files per request. Please upload in batches."`
+- Any file is not a PDF: `"Only PDF uploads are supported"` (file marked failed in results, others processed)
+
+```json
+{
+  "detail": "Maximum 10 files per request. Please upload in batches."
+}
+```
+
+#### Response `401 Unauthorized`
+
+```json
+{
+  "detail": "Invalid or missing authentication token"
+}
+```
+
+#### Response `500 Internal Server Error`
+
+Returned if a file fails during text extraction, embedding, or database operations. The file is marked `failed` in the results, but other files continue processing.
+
+```json
+{
+  "message": "Bulk document ingestion completed",
+  "total": 3,
+  "success": 1,
+  "failed": 2,
+  "results": [
+    { "status": "success", ... },
+    {
+      "file_name": "corrupted.pdf",
+      "status": "failed",
+      "error": "No readable content found in PDF",
+      "document": null
+    }
+  ]
 }
 ```
 

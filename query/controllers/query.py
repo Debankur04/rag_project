@@ -10,7 +10,7 @@ from query.services.prompt import prompt_builder
 
 async def query_controller(
     payload: NewQueryRequest,
-    user_id: int,
+    user_id: str,
     request_id: str | None = None,
 ) -> NewQueryResponse:
     query_id = str(uuid4())

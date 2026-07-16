@@ -2,10 +2,7 @@ from typing import Any
 
 from fastapi import HTTPException, Request, status
 
-from config.db import supabase, supabase_auth
-
-
-USER_TABLE = "users"
+from config.db import supabase_auth
 
 
 def _auth_error(detail: str, code: int = status.HTTP_400_BAD_REQUEST) -> HTTPException:
@@ -22,36 +19,17 @@ def _safe_user(user: Any) -> dict[str, Any] | None:
     }
 
 
-def _utc_now_iso() -> str:
-    from datetime import datetime
+def _app_user_from_auth_user(auth_user: dict[str, Any]) -> dict[str, Any]:
+    auth_user_id = auth_user.get("id")
+    if not auth_user_id:
+        raise RuntimeError("Supabase Auth user does not contain an id")
 
-    return datetime.utcnow().isoformat()
-
-
-def get_or_create_app_user(email: str) -> dict[str, Any]:
-    normalized_email = email.strip().lower()
-    response = (
-        supabase.table(USER_TABLE)
-        .select("*")
-        .eq("email", normalized_email)
-        .limit(1)
-        .execute()
-    )
-    if response.data:
-        return response.data[0]
-
-    created = (
-        supabase.table(USER_TABLE)
-        .insert({"email": normalized_email, "created_at": _utc_now_iso()})
-        .execute()
-    )
-    if not created.data:
-        raise RuntimeError("Unable to create application user")
-    return created.data[0]
-
-
-def update_last_login(user_id: int) -> None:
-    supabase.table(USER_TABLE).update({"last_login": _utc_now_iso()}).eq("id", user_id).execute()
+    return {
+        "id": str(auth_user_id),
+        "email": auth_user.get("email"),
+        "auth_user_id": str(auth_user_id),
+        "auth_user": auth_user,
+    }
 
 
 def _session_payload(response: Any) -> dict[str, Any]:
@@ -60,15 +38,7 @@ def _session_payload(response: Any) -> dict[str, Any]:
         raise _auth_error("Authentication failed", status.HTTP_401_UNAUTHORIZED)
 
     auth_user = _safe_user(getattr(response, "user", None))
-    try:
-        app_user = get_or_create_app_user(auth_user["email"]) if auth_user and auth_user.get("email") else None
-        if app_user:
-            update_last_login(app_user["id"])
-    except Exception as exc:
-        raise _auth_error(
-            "Login succeeded, but user profile sync failed. Check SUPABASE_SERVICE_ROLE_KEY or users table RLS policy.",
-            status.HTTP_500_INTERNAL_SERVER_ERROR,
-        ) from exc
+    app_user = _app_user_from_auth_user(auth_user) if auth_user else None
 
     return {
         "access_token": getattr(session, "access_token", None),
@@ -82,33 +52,34 @@ def _session_payload(response: Any) -> dict[str, Any]:
 
 def register_user(email: str, password: str) -> dict[str, Any]:
     try:
-        response = supabase_auth.auth.sign_up({"email": email, "password": password})
+        response = supabase_auth.auth.sign_up(
+            {
+                "email": email,
+                "password": password,
+            }
+        )
     except HTTPException:
         raise
     except Exception as exc:
         raise _auth_error("Unable to register user") from exc
 
-    try:
-        auth_user = _safe_user(getattr(response, "user", None))
-        app_user = get_or_create_app_user(auth_user["email"]) if auth_user and auth_user.get("email") else None
-        return {
-            "message": "Registration successful. Please check your email and login again.",
-            "user": auth_user,
-            "app_user": app_user,
-            "session": _session_payload(response) if getattr(response, "session", None) else None,
-        }
-    except HTTPException:
-        raise
-    except Exception as exc:
-        raise _auth_error(
-            "Registration succeeded, but user profile sync failed. Check SUPABASE_SERVICE_ROLE_KEY or users table RLS policy.",
-            status.HTTP_500_INTERNAL_SERVER_ERROR,
-        ) from exc
+    auth_user = _safe_user(getattr(response, "user", None))
+    return {
+        "message": "Registration successful. Please check your email if confirmation is enabled.",
+        "user": auth_user,
+        "app_user": _app_user_from_auth_user(auth_user) if auth_user else None,
+        "session": _session_payload(response) if getattr(response, "session", None) else None,
+    }
 
 
 def login_user(email: str, password: str) -> dict[str, Any]:
     try:
-        response = supabase_auth.auth.sign_in_with_password({"email": email, "password": password})
+        response = supabase_auth.auth.sign_in_with_password(
+            {
+                "email": email,
+                "password": password,
+            }
+        )
     except HTTPException:
         raise
     except Exception as exc:
@@ -151,26 +122,26 @@ def verify_request_token(request: Request) -> dict[str, Any]:
         raise _auth_error("Missing bearer token", status.HTTP_401_UNAUTHORIZED)
 
     try:
-        return {"user": get_user_from_access_token(token)}
+        auth_user = get_user_from_access_token(token)
+        return {
+            "user": auth_user,
+            "app_user": _app_user_from_auth_user(auth_user),
+        }
     except Exception as exc:
         raise _auth_error("Invalid bearer token", status.HTTP_401_UNAUTHORIZED) from exc
 
 
-def get_user_from_access_token(token: str) -> dict[str, Any] | None:
-    user = supabase.auth.get_user(token)
-    return _safe_user(getattr(user, "user", None))
+def get_user_from_access_token(token: str) -> dict[str, Any]:
+    response = supabase_auth.auth.get_user(token)
+    auth_user = _safe_user(getattr(response, "user", None))
+    if not auth_user:
+        raise RuntimeError("Invalid bearer token")
+    return auth_user
 
 
 def get_app_user_from_access_token(token: str) -> dict[str, Any]:
     auth_user = get_user_from_access_token(token)
-    if not auth_user or not auth_user.get("email"):
-        raise RuntimeError("Access token does not contain an email")
-    app_user = get_or_create_app_user(auth_user["email"])
-    return {
-        "id": app_user["id"],
-        "email": app_user["email"],
-        "auth_user": auth_user,
-    }
+    return _app_user_from_auth_user(auth_user)
 
 
 def logout_request(request: Request) -> dict[str, str]:

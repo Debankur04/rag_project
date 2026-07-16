@@ -11,7 +11,7 @@ DOC_TABLE = "docs"
 CHUNK_TABLE = "chunks"
 
 
-def _document_belongs_to_user(doc_id: int, user_id: int) -> bool:
+def _document_belongs_to_user(doc_id: int, user_id: str) -> bool:
     response = (
         supabase.table(DOC_TABLE)
         .select("id")
@@ -23,7 +23,7 @@ def _document_belongs_to_user(doc_id: int, user_id: int) -> bool:
     return bool(response.data)
 
 
-def delete_document(user_id: int, doc_id: str):
+def delete_document(user_id: str, doc_id: str):
     doc_id_int = int(doc_id)
     if not _document_belongs_to_user(doc_id_int, user_id):
         raise ValueError("Document not found for current user")
@@ -48,7 +48,7 @@ def delete_document(user_id: int, doc_id: str):
     }
 
 
-def delete_user_documents(user_id: int):
+def delete_user_documents(user_id: str):
     try:
         qdrant.delete_collection(f"user_{user_id}")
     except Exception:

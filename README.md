@@ -1,6 +1,6 @@
-# RAG Backend — Documentation
+# RAG Backend - Documentation
 
-Welcome to the documentation hub for the **RAG Backend API** — a production-oriented, multi-tenant Retrieval-Augmented Generation (RAG) service built with FastAPI.
+Welcome to the documentation hub for the **RAG Backend API** - a production-oriented, multi-tenant Retrieval-Augmented Generation (RAG) service built with FastAPI.
 
 ---
 
@@ -12,7 +12,7 @@ This backend enables any tenant to:
 2. **Query those documents** using natural language, backed by LLM-generated answers grounded strictly in the ingested content.
 3. **Manage authentication** (register, login, token refresh, password reset) via Supabase Auth.
 
-The system is designed to be safe, cost-aware, and observable — with rate limiting, semantic caching, guardrails, model routing, and structured logging baked in.
+The system is designed to be safe, cost-aware, and observable - with rate limiting, semantic caching, guardrails, model routing, and structured logging baked in.
 
 ---
 
@@ -20,9 +20,9 @@ The system is designed to be safe, cost-aware, and observable — with rate limiti
 
 | File | What it covers |
 |------|---------------|
-| [api.md](documentation/api.md) | All HTTP endpoints — methods, paths, request/response schemas, auth requirements, error codes |
-| [workings.md](documentation/workings.md) | How the system works end-to-end — ingestion pipeline, query pipeline, embedding, vector search, LLM calls, caching, and logging |
-| [decisions.md](documentation/decisions.md) | Architectural and technical decisions — why specific databases, models, chunking strategies, and design patterns were chosen |
+| [api.md](documentation/api.md) | All HTTP endpoints - methods, paths, request/response schemas, auth requirements, error codes |
+| [workings.md](documentation/workings.md) | How the system works end-to-end - ingestion pipeline, query pipeline, embedding, vector search, LLM calls, caching, and logging |
+| [decisions.md](documentation/decisions.md) | Architectural and technical decisions - why specific databases, models, chunking strategies, and design patterns were chosen |
 
 ---
 
@@ -95,19 +95,19 @@ Interactive docs (Swagger UI) are served at `http://localhost:8000/docs`.
 
 ```
 +------------------------------------------------------------------+
-¦                        FastAPI Application                        ¦
-¦                                                                    ¦
-¦  +------------+   +-------------------+   +--------------------+ ¦
-¦  ¦  /auth/*   ¦   ¦  /add_doc         ¦   ¦  /query            ¦ ¦
-¦  ¦  Supabase  ¦   ¦  /delete_doc      ¦   ¦  Cache ? Embed     ¦ ¦
-¦  ¦  JWT Auth  ¦   ¦  /delete_tenant   ¦   ¦  ? Qdrant Search   ¦ ¦
-¦  +------------+   +-------------------+   ¦  ? LLM ? Validate  ¦ ¦
-¦                                            +--------------------+ ¦
-+------------------------------------------------------------------¦
-¦  Middleware: RateLimitMiddleware (Redis) ¦ APIKeyMiddleware       ¦
-+------------------------------------------------------------------¦
-¦  Data Stores                                                       ¦
-¦  PostgreSQL (metadata) ¦ Qdrant (vectors) ¦ Redis ¦ MongoDB (logs)¦
+Â¦                        FastAPI Application                        Â¦
+Â¦                                                                    Â¦
+Â¦  +------------+   +-------------------+   +--------------------+ Â¦
+Â¦  Â¦  /auth/*   Â¦   Â¦  /add_doc         Â¦   Â¦  /query            Â¦ Â¦
+Â¦  Â¦  Supabase  Â¦   Â¦  /delete_doc      Â¦   Â¦  Cache ? Embed     Â¦ Â¦
+Â¦  Â¦  JWT Auth  Â¦   Â¦  /delete_tenant   Â¦   Â¦  ? Qdrant Search   Â¦ Â¦
+Â¦  +------------+   +-------------------+   Â¦  ? LLM ? Validate  Â¦ Â¦
+Â¦                                            +--------------------+ Â¦
++------------------------------------------------------------------Â¦
+Â¦  Middleware: RateLimitMiddleware (Redis) Â¦ APIKeyMiddleware       Â¦
++------------------------------------------------------------------Â¦
+Â¦  Data Stores                                                       Â¦
+Â¦  PostgreSQL (metadata) Â¦ Qdrant (vectors) Â¦ Redis Â¦ MongoDB (logs)Â¦
 +------------------------------------------------------------------+
 ```
 
@@ -119,20 +119,20 @@ Interactive docs (Swagger UI) are served at `http://localhost:8000/docs`.
 rag_project/
 +-- main.py                  # FastAPI app entry point, lifespan hooks, middleware
 +-- config/
-¦   +-- settings.py          # Pydantic Settings — all env vars
-¦   +-- config.yaml          # LLM model definitions and routing rules
-¦   +-- db.py                # Lazy Supabase + Qdrant client wrappers
-¦   +-- db_config.py         # SQLAlchemy engine, session factory, get_db()
+Â¦   +-- settings.py          # Pydantic Settings - all env vars
+Â¦   +-- config.yaml          # LLM model definitions and routing rules
+Â¦   +-- db.py                # Lazy Supabase + Qdrant client wrappers
+Â¦   +-- db_config.py         # SQLAlchemy engine, session factory, get_db()
 +-- auth/                    # Authentication module (Supabase-backed)
-¦   +-- controllers/         # Route handlers
-¦   +-- services/            # Business logic (register, login, refresh, etc.)
-¦   +-- dto/                 # Pydantic request/response models
+Â¦   +-- controllers/         # Route handlers
+Â¦   +-- services/            # Business logic (register, login, refresh, etc.)
+Â¦   +-- dto/                 # Pydantic request/response models
 +-- doc_ingestion/           # Document ingestion module
-¦   +-- controllers/         # Route handlers
-¦   +-- services/            # PDF reading, chunking, embedding, Qdrant upsert
-¦   +-- models/              # SQLAlchemy ORM models (Document, Chunk)
-¦   +-- middleware/          # APIKeyMiddleware
-¦   +-- dto/                 # Request/response schemas
+Â¦   +-- controllers/         # Route handlers
+Â¦   +-- services/            # PDF reading, chunking, embedding, Qdrant upsert
+Â¦   +-- models/              # SQLAlchemy ORM models (Document, Chunk)
+Â¦   +-- middleware/          # APIKeyMiddleware
+Â¦   +-- dto/                 # Request/response schemas
 +-- query/                   # Query module
     +-- controllers/         # Route handlers
     +-- services/            # Cache, query orchestration, prompt building, logging

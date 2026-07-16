@@ -13,7 +13,7 @@ def _result_key(result: dict[str, Any]) -> str:
 
 
 def dense_search(
-    user_id: int,
+    user_id: str,
     embedding: list[float],
     top_k: int,
 ) -> list[dict[str, Any]]:

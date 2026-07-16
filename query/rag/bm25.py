@@ -1,14 +1,21 @@
-# Sparse retrieval using locally indexed Elasticsearch chunks plus bm25s ranking.
+# Sparse retrieval using Elasticsearch's native BM25 scoring.
 
 from typing import Any
 
 from config.settings import settings
 
+_client = None
+
 
 def _get_client():
+    global _client
+    if _client is not None:
+        return _client
+
     from elasticsearch import Elasticsearch
 
-    return Elasticsearch(settings.ELASTICSEARCH_URL)
+    _client = Elasticsearch(settings.ELASTICSEARCH_URL)
+    return _client
 
 
 def _ensure_index() -> None:
@@ -20,7 +27,7 @@ def _ensure_index() -> None:
         index=settings.ELASTICSEARCH_INDEX,
         mappings={
             "properties": {
-                "user_id": {"type": "integer"},
+                "user_id": {"type": "keyword"},
                 "document_id": {"type": "integer"},
                 "vector_id": {"type": "keyword"},
                 "chunk_index": {"type": "integer"},
@@ -31,7 +38,7 @@ def _ensure_index() -> None:
     )
 
 
-def _document_id(user_id: int, document_id: int, chunk_index: int) -> str:
+def _document_id(user_id: str, document_id: int, chunk_index: int) -> str:
     return f"{user_id}:{document_id}:{chunk_index}"
 
 
@@ -50,12 +57,12 @@ def bulk_index_chunks(chunks: list[dict[str, Any]]) -> None:
                     "_op_type": "index",
                     "_index": settings.ELASTICSEARCH_INDEX,
                     "_id": _document_id(
-                        int(chunk["user_id"]),
+                        str(chunk["user_id"]),
                         int(chunk["document_id"]),
                         int(chunk["chunk_index"]),
                     ),
                     "_source": {
-                        "user_id": int(chunk["user_id"]),
+                        "user_id": str(chunk["user_id"]),
                         "document_id": int(chunk["document_id"]),
                         "vector_id": chunk.get("vector_id"),
                         "chunk_index": int(chunk["chunk_index"]),
@@ -70,14 +77,14 @@ def bulk_index_chunks(chunks: list[dict[str, Any]]) -> None:
         print(f"Elasticsearch sparse indexing skipped: {exc}")
 
 
-def delete_document_chunks(user_id: int, document_id: int) -> None:
+def delete_document_chunks(user_id: str, document_id: int) -> None:
     try:
         _get_client().delete_by_query(
             index=settings.ELASTICSEARCH_INDEX,
             query={
                 "bool": {
                     "filter": [
-                        {"term": {"user_id": int(user_id)}},
+                        {"term": {"user_id": str(user_id)}},
                         {"term": {"document_id": int(document_id)}},
                     ]
                 }
@@ -89,11 +96,11 @@ def delete_document_chunks(user_id: int, document_id: int) -> None:
         print(f"Elasticsearch document cleanup skipped: {exc}")
 
 
-def delete_user_chunks(user_id: int) -> None:
+def delete_user_chunks(user_id: str) -> None:
     try:
         _get_client().delete_by_query(
             index=settings.ELASTICSEARCH_INDEX,
-            query={"term": {"user_id": int(user_id)}},
+            query={"term": {"user_id": str(user_id)}},
             conflicts="proceed",
             refresh=True,
         )
@@ -101,56 +108,55 @@ def delete_user_chunks(user_id: int) -> None:
         print(f"Elasticsearch user cleanup skipped: {exc}")
 
 
-def _load_user_chunks(user_id: int) -> list[dict[str, Any]]:
-    response = _get_client().search(
-        index=settings.ELASTICSEARCH_INDEX,
-        body={
-            "size": settings.BM25_CANDIDATE_LIMIT,
-            "query": {"term": {"user_id": int(user_id)}},
-            "_source": [
-                "user_id",
-                "document_id",
-                "vector_id",
-                "chunk_index",
-                "source",
-                "text",
-            ],
-        },
-    )
-    return [hit["_source"] for hit in response["hits"]["hits"]]
-
-
-def bm25_search(user_id: int, query: str, top_k: int) -> list[dict[str, Any]]:
+def bm25_search(user_id: str, query: str, top_k: int) -> list[dict[str, Any]]:
     try:
-        import bm25s
-
-        chunks = _load_user_chunks(user_id)
-        if not chunks:
-            return []
-
-        corpus = [chunk["text"] for chunk in chunks]
-        corpus_tokens = bm25s.tokenize(corpus)
-        retriever = bm25s.BM25()
-        retriever.index(corpus_tokens)
-
-        query_tokens = bm25s.tokenize([query])
-        indexes, scores = retriever.retrieve(query_tokens, k=min(top_k, len(chunks)))
+        response = _get_client().search(
+            index=settings.ELASTICSEARCH_INDEX,
+            body={
+                "size": top_k,
+                "query": {
+                    "bool": {
+                        "filter": [
+                            {"term": {"user_id": str(user_id)}},
+                        ],
+                        "must": [
+                            {
+                                "match": {
+                                    "text": {
+                                        "query": query,
+                                        "operator": "or",
+                                    }
+                                }
+                            }
+                        ],
+                    }
+                },
+                "_source": [
+                    "user_id",
+                    "document_id",
+                    "vector_id",
+                    "chunk_index",
+                    "source",
+                    "text",
+                ],
+            },
+        )
     except Exception as exc:
-        print(f"BM25 sparse search skipped: {exc}")
+        print(f"Elasticsearch BM25 search skipped: {exc}")
         return []
 
     results = []
-    for rank, (index, score) in enumerate(zip(indexes[0], scores[0]), start=1):
-        chunk = chunks[int(index)]
+    for rank, hit in enumerate(response["hits"]["hits"], start=1):
+        chunk = hit["_source"]
         item = {
             "id": _document_id(
-                int(chunk["user_id"]),
+                str(chunk["user_id"]),
                 int(chunk["document_id"]),
                 int(chunk["chunk_index"]),
             ),
             "key": chunk.get("vector_id")
             or _document_id(
-                int(chunk["user_id"]),
+                str(chunk["user_id"]),
                 int(chunk["document_id"]),
                 int(chunk["chunk_index"]),
             ),
@@ -159,7 +165,7 @@ def bm25_search(user_id: int, query: str, top_k: int) -> list[dict[str, Any]]:
             "chunk_index": chunk.get("chunk_index"),
             "source": chunk.get("source"),
             "text": chunk["text"],
-            "score": float(score),
+            "score": float(hit.get("_score") or 0.0),
             "rank": rank,
             "retriever": "bm25",
         }

@@ -1,6 +1,6 @@
 from doc_ingestion.dto.Doc_dto import DeleteDocRequest
 
-def delete_doc(payload: DeleteDocRequest, user_id: int):
+def delete_doc(payload: DeleteDocRequest, user_id: str):
     from doc_ingestion.services.delete import delete_document
 
     result = delete_document(

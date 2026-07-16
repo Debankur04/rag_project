@@ -26,7 +26,7 @@ def compute_file_hash(file_path: Path) -> str:
     return hasher.hexdigest()
 
 
-def get_existing_document(user_id: int, content_hash: str):
+def get_existing_document(user_id: str, content_hash: str):
     response = (
         supabase.table(DOC_TABLE)
         .select("*")
@@ -54,7 +54,7 @@ def get_existing_document(user_id: int, content_hash: str):
 
 
 def create_document(
-    user_id: int,
+    user_id: str,
     file_name: str,
     file_path: Path,
     file_url: str,

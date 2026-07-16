@@ -12,7 +12,7 @@ def _utc_now() -> str:
 
 
 def get_or_create_conversation(
-    user_id: int,
+    user_id: str,
     conversation_id: int | None,
     first_message: str,
 ) -> dict:
@@ -47,7 +47,7 @@ def get_or_create_conversation(
     return response.data[0]
 
 
-def create_conversation(user_id: int, title: str | None = None) -> dict:
+def create_conversation(user_id: str, title: str | None = None) -> dict:
     response = (
         supabase.table(CONVERSATION_TABLE)
         .insert(
@@ -65,7 +65,7 @@ def create_conversation(user_id: int, title: str | None = None) -> dict:
     return response.data[0]
 
 
-def list_conversations(user_id: int) -> list[dict]:
+def list_conversations(user_id: str) -> list[dict]:
     response = (
         supabase.table(CONVERSATION_TABLE)
         .select("*")
@@ -76,7 +76,7 @@ def list_conversations(user_id: int) -> list[dict]:
     return response.data or []
 
 
-def get_conversation(user_id: int, conversation_id: int) -> dict:
+def get_conversation(user_id: str, conversation_id: int) -> dict:
     response = (
         supabase.table(CONVERSATION_TABLE)
         .select("*")
@@ -90,7 +90,7 @@ def get_conversation(user_id: int, conversation_id: int) -> dict:
     return response.data[0]
 
 
-def get_conversation_messages(user_id: int, conversation_id: int) -> dict:
+def get_conversation_messages(user_id: str, conversation_id: int) -> dict:
     conversation = get_conversation(user_id, conversation_id)
     messages = (
         supabase.table(MESSAGE_TABLE)
@@ -102,7 +102,7 @@ def get_conversation_messages(user_id: int, conversation_id: int) -> dict:
     return {"conversation": conversation, "messages": messages.data or []}
 
 
-def rename_conversation(user_id: int, conversation_id: int, title: str) -> dict:
+def rename_conversation(user_id: str, conversation_id: int, title: str) -> dict:
     get_conversation(user_id, conversation_id)
     response = (
         supabase.table(CONVERSATION_TABLE)
@@ -116,7 +116,7 @@ def rename_conversation(user_id: int, conversation_id: int, title: str) -> dict:
     return response.data[0]
 
 
-def delete_conversation(user_id: int, conversation_id: int) -> dict:
+def delete_conversation(user_id: str, conversation_id: int) -> dict:
     get_conversation(user_id, conversation_id)
     supabase.table(MESSAGE_TABLE).delete().eq("conversation_id", conversation_id).execute()
     supabase.table(CONVERSATION_TABLE).delete().eq("id", conversation_id).eq("user_id", user_id).execute()

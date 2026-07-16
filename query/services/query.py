@@ -3,6 +3,7 @@
 import asyncio
 import time
 
+from config.embeddings import embed_query
 from config.settings import settings
 from config.timing import async_timed_stage, timed_stage
 
@@ -14,22 +15,9 @@ from query.rag.dense import dense_search
 from query.rag.reranker import rerank_chunks
 from query.rag.rrf import reciprocal_rank_fusion
 
-EMBED_MODEL_NAME = "all-MiniLM-L6-v2"
-
-embeddings = None
-
 # Load configuration and initialize ModelRouter
 config = load_config()
 router = ModelRouter(config)
-
-
-def _get_embeddings():
-    global embeddings
-    if embeddings is None:
-        from langchain_huggingface import HuggingFaceEmbeddings
-
-        embeddings = HuggingFaceEmbeddings(model_name=EMBED_MODEL_NAME)
-    return embeddings
 
 
 async def _invoke_llm_with_router(
@@ -80,7 +68,7 @@ async def _invoke_llm_with_router(
 
 
 async def run_query(
-    user_id: int,
+    user_id: str,
     user_query: str,
     prompt: str,
     db=None,
@@ -96,7 +84,7 @@ async def run_query(
 
     async with async_timed_stage("query.embedding", request_id=request_id):
         embedding = await asyncio.to_thread(
-            lambda: _get_embeddings().embed_query(clean_user_query)
+            lambda: embed_query(clean_user_query)
         )
 
     retrieval_top_k = max(top_k, settings.HYBRID_RETRIEVAL_TOP_K)

@@ -5,6 +5,7 @@ from pathlib import Path
 from uuid import uuid4
 
 from config.db import qdrant
+from config.embeddings import embed_query
 from doc_ingestion.services.documents_chunks import bulk_insert_chunks
 from doc_ingestion.services.documents_table import (
     compute_file_hash,
@@ -19,17 +20,6 @@ from query.rag.bm25 import bulk_index_chunks, delete_document_chunks
 
 CHUNK_SIZE = 1000
 CHUNK_OVERLAP = 200
-EMBED_MODEL_NAME = "all-MiniLM-L6-v2"
-embeddings = None
-
-
-def _get_embeddings():
-    global embeddings
-    if embeddings is None:
-        from langchain_huggingface import HuggingFaceEmbeddings
-
-        embeddings = HuggingFaceEmbeddings(model_name=EMBED_MODEL_NAME)
-    return embeddings
 
 
 def ocr_image(pdf_path: str) -> str:
@@ -77,21 +67,21 @@ def read_pdf_with_fallback(file_path: str):
     return [Document(page_content=text, metadata={"source": file_path})]
 
 
-def _ensure_collection(user_id: int):
+def _ensure_collection(user_id: str):
     from qdrant_client.models import Distance, VectorParams
 
     collection_name = f"user_{user_id}"
     if qdrant.collection_exists(collection_name=collection_name):
         return
 
-    dim = len(_get_embeddings().embed_query("dimension_probe"))
+    dim = len(embed_query("dimension_probe"))
     qdrant.create_collection(
         collection_name=collection_name,
         vectors_config=VectorParams(size=dim, distance=Distance.COSINE),
     )
 
 
-def ingest_pdf(user_id: int, file_path: str, source: str | None = None):
+def ingest_pdf(user_id: str, file_path: str, source: str | None = None):
     from langchain_text_splitters import RecursiveCharacterTextSplitter
     from qdrant_client import models
 
@@ -140,7 +130,7 @@ def ingest_pdf(user_id: int, file_path: str, source: str | None = None):
         sparse_chunks = []
         for index, chunk in enumerate(chunks):
             vector_id = str(uuid4())
-            vector = _get_embeddings().embed_query(chunk.page_content)
+            vector = embed_query(chunk.page_content)
 
             points.append(
                 models.PointStruct(

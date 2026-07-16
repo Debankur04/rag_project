@@ -49,7 +49,7 @@ def list_documents_for_user(user_id):
     response = (
         supabase.table(DOC_TABLE)
         .select("id,filename,status,created_at")
-        .eq("user_id", int(user_id))
+        .eq("user_id", str(user_id))
         .neq("status", "deleted")
         .execute()
     )
