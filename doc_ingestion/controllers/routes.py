@@ -5,6 +5,7 @@ from fastapi import APIRouter, File, Request, UploadFile
 from doc_ingestion.controllers.add_doc import add_doc, add_docs
 from doc_ingestion.controllers.delete_doc import delete_doc
 from doc_ingestion.controllers.delete_user_data import delete_user_data_controller
+from doc_ingestion.controllers.list_docs import list_docs
 from doc_ingestion.dto.Doc_dto import DeleteDocRequest
 
 
@@ -40,6 +41,11 @@ async def add_docs_endpoint(
     Failed files do not prevent other files from processing.
     """
     return add_docs(user_id=request.state.app_user["id"], files=files)
+
+
+@router.get("/documents")
+def list_docs_endpoint(request: Request):
+    return list_docs(user_id=request.state.app_user["id"])
 
 
 @router.delete("/delete_doc")

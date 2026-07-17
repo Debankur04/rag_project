@@ -491,6 +491,41 @@ curl -X POST http://localhost:8000/add_docs \
 
 ---
 
+### `GET /documents`
+
+List all non-deleted documents belonging to the authenticated user.
+
+**Authentication:** Bearer token
+
+The `user_id` is derived from the Supabase JWT. No user or tenant id is accepted in the request.
+
+**Example**
+```bash
+curl http://localhost:8000/documents \
+  -H "Authorization: Bearer <token>"
+```
+
+**Response `200 OK`**
+```json
+{
+  "documents": [
+    {
+      "id": 42,
+      "source_name": "report.pdf",
+      "status": "ingested",
+      "created_at": "2026-07-16T10:00:00.000Z"
+    }
+  ]
+}
+```
+
+**Response `401 Unauthorized`**
+```json
+{ "detail": "Missing bearer token" }
+```
+
+---
+
 ### `DELETE /delete_doc`
 
 Permanently delete a specific document and all of its associated data.
