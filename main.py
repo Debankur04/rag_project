@@ -14,7 +14,7 @@ from doc_ingestion.controllers.health import health_check
 from doc_ingestion.controllers.routes import router as doc_ingestion_router
 from query.controllers.routes import router as query_router
 from query.middleware.rate_limiter import RateLimitMiddleware
-
+from fastapi.middleware.cors import CORSMiddleware
 
 middleware = [Middleware(RateLimitMiddleware)]
 
@@ -34,6 +34,17 @@ app = FastAPI(
 
 app.middleware("http")(access_token_middleware)
 
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+        "https://poneglyph-sigma.vercel.app/"
+    ],
+    allow_credentials = True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 @app.middleware("http")
 async def api_timing_middleware(request: Request, call_next):
