@@ -7,6 +7,7 @@ from uuid import uuid4
 from config.db import qdrant
 from config.embeddings import embed_query
 from doc_ingestion.services.documents_chunks import bulk_insert_chunks
+from doc_ingestion.services.documents_chunks import delete_chunks_for_document
 from doc_ingestion.services.documents_table import (
     compute_file_hash,
     create_document,
@@ -108,6 +109,7 @@ def ingest_pdf(user_id: str, file_path: str, source: str | None = None):
         file_path=file_path_obj,
         file_url=file_name,
     )
+    delete_chunks_for_document(document_id)
     mark_document_processing(document_id)
 
     inserted_vector_ids = []

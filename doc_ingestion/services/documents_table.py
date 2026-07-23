@@ -53,6 +53,19 @@ def get_existing_document(user_id: str, content_hash: str):
     return None
 
 
+def get_document_for_reupload(user_id: str, content_hash: str):
+    response = (
+        supabase.table(DOC_TABLE)
+        .select("*")
+        .eq("user_id", user_id)
+        .eq("content_hash", content_hash)
+        .in_("status", ["deleted", "failed", "pending", "processing"])
+        .limit(1)
+        .execute()
+    )
+    return _as_obj((response.data or [None])[0])
+
+
 def create_document(
     user_id: str,
     file_name: str,
@@ -63,6 +76,27 @@ def create_document(
     existing = get_existing_document(user_id, content_hash)
     if existing:
         return existing.id, content_hash, existing
+
+    reupload = get_document_for_reupload(user_id, content_hash)
+    if reupload:
+        response = (
+            supabase.table(DOC_TABLE)
+            .update(
+                {
+                    "filename": file_name,
+                    "url": file_url,
+                    "status": "pending",
+                    "updated_at": _utc_now(),
+                }
+            )
+            .eq("id", reupload.id)
+            .eq("user_id", user_id)
+            .execute()
+        )
+        row = (response.data or [None])[0]
+        if not row:
+            raise RuntimeError("Supabase did not return the reusable document")
+        return row["id"], content_hash, _as_obj(row)
 
     payload = {
         "user_id": user_id,
