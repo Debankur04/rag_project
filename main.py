@@ -39,9 +39,10 @@ app.add_middleware(
     allow_origins=[
         "http://localhost:3000",
         "http://127.0.0.1:3000",
-        "https://poneglyph-sigma.vercel.app/"
+        "https://poneglyph-sigma.vercel.app",
+        "https://poneglyph.debankurdutta.me",
     ],
-    allow_credentials = True,
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
