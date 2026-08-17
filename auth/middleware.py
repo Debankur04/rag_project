@@ -38,7 +38,7 @@ async def access_token_middleware(request: Request, call_next):
 
     try:
         request.state.app_user = get_app_user_from_access_token(token)
-        request.state.user = request.state.app_user["auth_user"]
+        request.state.user = request.state.app_user
     except Exception:
         return JSONResponse(
             status_code=status.HTTP_401_UNAUTHORIZED,

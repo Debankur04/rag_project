@@ -9,13 +9,19 @@ def _auth_error(detail: str, code: int = status.HTTP_400_BAD_REQUEST) -> HTTPExc
     return HTTPException(status_code=code, detail=detail)
 
 
+def _read_field(value: Any, field: str) -> Any:
+    if isinstance(value, dict):
+        return value.get(field)
+    return getattr(value, field, None)
+
+
 def _safe_user(user: Any) -> dict[str, Any] | None:
     if not user:
         return None
     return {
-        "id": getattr(user, "id", None),
-        "email": getattr(user, "email", None),
-        "created_at": getattr(user, "created_at", None),
+        "id": _read_field(user, "id"),
+        "email": _read_field(user, "email"),
+        "created_at": _read_field(user, "created_at"),
     }
 
 
@@ -27,24 +33,22 @@ def _app_user_from_auth_user(auth_user: dict[str, Any]) -> dict[str, Any]:
     return {
         "id": str(auth_user_id),
         "email": auth_user.get("email"),
-        "auth_user_id": str(auth_user_id),
-        "auth_user": auth_user,
     }
 
 
 def _session_payload(response: Any) -> dict[str, Any]:
-    session = getattr(response, "session", None)
+    session = _read_field(response, "session")
     if not session:
         raise _auth_error("Authentication failed", status.HTTP_401_UNAUTHORIZED)
 
-    auth_user = _safe_user(getattr(response, "user", None))
+    auth_user = _safe_user(_read_field(response, "user"))
     app_user = _app_user_from_auth_user(auth_user) if auth_user else None
 
     return {
-        "access_token": getattr(session, "access_token", None),
-        "refresh_token": getattr(session, "refresh_token", None),
-        "expires_in": getattr(session, "expires_in", None),
-        "token_type": getattr(session, "token_type", "bearer"),
+        "access_token": _read_field(session, "access_token"),
+        "refresh_token": _read_field(session, "refresh_token"),
+        "expires_in": _read_field(session, "expires_in"),
+        "token_type": _read_field(session, "token_type") or "bearer",
         "user": auth_user,
         "app_user": app_user,
     }
@@ -63,12 +67,12 @@ def register_user(email: str, password: str) -> dict[str, Any]:
     except Exception as exc:
         raise _auth_error("Unable to register user") from exc
 
-    auth_user = _safe_user(getattr(response, "user", None))
+    auth_user = _safe_user(_read_field(response, "user"))
     return {
         "message": "Registration successful. Please check your email if confirmation is enabled.",
         "user": auth_user,
         "app_user": _app_user_from_auth_user(auth_user) if auth_user else None,
-        "session": _session_payload(response) if getattr(response, "session", None) else None,
+        "session": _session_payload(response) if _read_field(response, "session") else None,
     }
 
 
@@ -133,7 +137,7 @@ def verify_request_token(request: Request) -> dict[str, Any]:
 
 def get_user_from_access_token(token: str) -> dict[str, Any]:
     response = supabase_auth.auth.get_user(token)
-    auth_user = _safe_user(getattr(response, "user", None))
+    auth_user = _safe_user(_read_field(response, "user"))
     if not auth_user:
         raise RuntimeError("Invalid bearer token")
     return auth_user
